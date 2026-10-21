@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "retools"
+version = "0.1.0"
+description = "Порт расчётника RE Tools (VBA/Excel) на Python: подбор компоновки ГС/МЗС по РИГИС, расчёт добычи по рейтингу ГТМ"
+requires-python = ">=3.10"
+dependencies = ["numpy", "scipy", "openpyxl", "pandas"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+ui = ["streamlit>=1.40", "plotly", "matplotlib"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
