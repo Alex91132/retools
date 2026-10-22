@@ -238,6 +238,20 @@ def _settings(case: RigisCase) -> RigisCase:
         owc_off = g4.number_input("Отступ от ВНК, м", 0.0, 100.0, 0.0, 0.5)
         st.session_state["contacts"] = dict(goc_tvd=goc or None, goc_offset=goc_off, owc_tvd=owc or None,
                                             owc_offset=owc_off)
+        use_bar = st.checkbox("Барьер (непроницаемый или плотный прослой) между стволом и ВНК/ГНК", value=False,
+                              help="Прослой глины или плотняка останавливает конус: вода снизу (газ сверху) проходит "
+                                   "через него не больше Дарси-потока при депрессии среза, остальная вода обходит "
+                                   "барьер и приходит сбоку. Отметки — абсолютные, как у ВНК.")
+        if use_bar:
+            b1, b2, b3 = st.columns(3)
+            b_top = b1.number_input("Кровля барьера, АО", 0.0, 10000.0, float(owc - 1.5 if owc else (goc + 0.5 if goc else 0.0)),
+                                    0.5, help="Барьер должен лежать целиком между стволом и ВНК (или между ГНК и стволом)")
+            b_th = b2.number_input("Толщина, м", 0.1, 100.0, 1.0, 0.5)
+            b_k = b3.number_input("Проницаемость, мД", 0.0, 1000.0, 0.0, 0.001, format="%.4f",
+                                  help="0 — непроницаемый")
+            st.session_state["barrier"] = dict(top_tvd=b_top, thickness=b_th, perm=b_k) if b_top > 0 else None
+        else:
+            st.session_state["barrier"] = None
         st.session_state["wc_mode"] = "filter" if wc_mode.startswith("для каждого") else "well"
         st.session_state["gas_offset"] = gas_offset
         x1, x2 = st.columns([3, 2])
@@ -370,7 +384,7 @@ def _watering_map(c_case, comp, fc, li: int, rho: float, title: str):
     return fig
 
 
-def _cone_section(c_case, comp, fc, li: int, month: int, owc, goc, rules, title: str):
+def _cone_section(c_case, comp, fc, li: int, month: int, owc, goc, rules, title: str, barrier=None):
     """Разрез вдоль ствола: траектория по абс. отметке, ВНК/ГНК, поднявшаяся вода и опустившийся газ."""
     sl = c_case.slices
     pts = [(k, (s.top + s.bottom) / 2, (s.top_tvd + s.bottom_tvd) / 2) for k, s in enumerate(sl) if s.bottom_tvd > 0]
@@ -404,6 +418,11 @@ def _cone_section(c_case, comp, fc, li: int, month: int, owc, goc, rules, title:
         fig.add_trace(go.Scatter(x=md, y=front, mode="lines", fill="tonexty", fillcolor="rgba(214,69,69,0.30)",
                                  line=dict(color="#d64545", width=1.5), name="газ (фронт)",
                                  hovertemplate="%{x:.0f} м<br>фронт газа %{y:.1f} м АО<extra></extra>"))
+    if barrier and barrier.get("top_tvd"):
+        b_top, b_bot = barrier["top_tvd"], barrier["top_tvd"] + barrier.get("thickness", 0.0)
+        fig.add_trace(go.Scatter(x=[md[0], md[-1], md[-1], md[0], md[0]], y=[b_top, b_top, b_bot, b_bot, b_top],
+                                 fill="toself", fillcolor="rgba(120,120,120,0.45)", line=dict(color="#777", width=1),
+                                 name=f"барьер ({barrier.get('perm', 0):g} мД)", hoverinfo="name"))
     fig.add_trace(go.Scatter(x=md, y=tvd, mode="lines", line=dict(color="#555", width=2), name="ствол",
                              hovertemplate="%{x:.0f} м по стволу<br>%{y:.1f} м АО<extra></extra>"))
     for f in comp.filters:
@@ -448,11 +467,12 @@ def _dynamics_charts(cases, variants, fkw, rho, rules, state):
         n = len([m for m in f.months if m.working]) or 1
         month = st.slider("Месяц разреза", 1, n, n, key=f"dyn_month_{name}")
         fig = _cone_section(cases[li], w.laterals[li], f, li, month, owc, goc, rules,
-                            f"Разрез вдоль ствола, месяц {month} — {name}")
+                            f"Разрез вдоль ствола, месяц {month} — {name}", fkw.get("barrier"))
         if fig is not None:
             st.plotly_chart(fig, use_container_width=True, key=f"section_{name}_{li}")
             st.caption("Вода поднимается от ВНК, газ опускается от ГНК (Баклей–Леверетт с гравитацией). Когда фронт "
-                       "доходит до ствола — прорыв. Масштаб по вертикали растянут.")
+                       "доходит до ствола — прорыв. Показана только подошвенная часть; вода сбоку (законтурная, ППД) "
+                       "на разрезе не видна — её прорыв в таблице ниже («Откуда вода»). Масштаб по вертикали растянут.")
     elif fkw.get("displacement") == "bl":
         st.caption("Разрез с конусами появится, если задать ВНК или ГНК в «Контактах» (абс. отметка).")
 
@@ -472,6 +492,15 @@ def _forecast_settings(case):
                                        "упрощённое: обводнение сразу (как раньше)"], horizontal=True,
                         help="Баклей–Леверетт: вода (и газ шапки) приходит фронтом; при заданных в «Контактах» "
                              "ВНК/ГНК — снизу и сверху через столб пласта с гравитацией (конусы).")
+        w1, w2 = st.columns([3, 2])
+        src = w1.radio("Источник воды (для Баклея–Леверетта)",
+                       ["смешанный: снизу и сбоку", "снизу — подошвенная вода от ВНК",
+                        "сбоку — законтурная вода, ППД"], horizontal=True,
+                       help="Снизу — конус от ВНК (нужен ВНК в «Контактах»); сбоку — фронт с латерали "
+                            "(законтурная вода, нагнетательные скважины). Смешанный — компенсация делится по доле.")
+        share = 1.0 if src.startswith("снизу") else 0.0 if src.startswith("сбоку") else w2.slider(
+            "Доля подошвенной воды", 0.0, 1.0, 0.5, 0.05,
+            help="Какая часть компенсации приходит снизу от ВНК; остальное — сбоку")
         st.markdown("**Перетоки через пакеры** (негерметичность, износ эластомеров)")
         l1, l2, _ = st.columns([1, 1, 4])
         leak = l1.number_input("Доля потенциала, %", 0.0, 100.0, 0.0, 1.0,
@@ -490,7 +519,8 @@ def _forecast_settings(case):
             packer=e3.number_input("Пакер-эластомер, тыс. руб./шт", 0.0, 1e5, d.packer, 10.0),
             fixed=e4.number_input("Прочее на компоновку, тыс. руб.", 0.0, 1e6, d.fixed, 100.0))
     fkw = dict(months=int(years * 12), vrr=vrr, k_oper=k_oper, q_min=q_min, wc_max=wc_max,
-               leak=leak / 100, leak_growth=growth / 100, displacement="bl" if disp.startswith("Баклей") else "piston")
+               leak=leak / 100, leak_growth=growth / 100, displacement="bl" if disp.startswith("Баклей") else "piston",
+               bottom_share=share)
     return fkw, p_wf, econ, int(years)
 
 
@@ -517,7 +547,9 @@ def render():
     fkw["zones"] = [zones] * len(cases)
     cf = state.get("crossflow", {"crossflow": True, "trans_mult": 1.0})
     contacts = state.get("contacts", {})
-    fkw.update(cf, owc_tvd=contacts.get("owc_tvd"), goc_tvd=contacts.get("goc_tvd"))
+    fkw.update(cf, owc_tvd=contacts.get("owc_tvd"), goc_tvd=contacts.get("goc_tvd"), barrier=state.get("barrier"))
+    if fkw["owc_tvd"] is None:
+        fkw["bottom_share"] = 0.0          # без ВНК вода только сбоку
     fcase = [replace(c, defaults=replace(c.defaults, p_wf=p_wf)) for c in cases]
     st.subheader("3. Подбор")
     goal = st.radio("Цель подбора", list(OBJECTIVES), format_func=OBJECTIVES.get, horizontal=True,
@@ -688,12 +720,15 @@ def render():
                 bg = [d["bt_g"] for d in inf if d.get("bt_g")]
                 vert = [d for d in inf if d.get("vertical")]
                 unstable = [d for d in vert if d.get("flux_w", 0) > d.get("q_crit_w", float("inf"))]
+                first = min((d for d in inf if d.get("bt_w")), key=lambda d: d["bt_w"], default=None)
                 brows.append({"Ствол": wc.names[li], "Фильтр": n_f, "Кровля, м": round(flt.top, 1),
                               "Подошва, м": round(flt.bottom, 1),
                               "Прорыв воды, мес": min(bw) if bw else "нет",
+                              "Откуда вода": (first.get("src_w") or "—") if first else "—",
                               "Срезов с прорывом воды": len(bw),
                               "Прорыв газа, мес": min(bg) if bg else "нет",
                               "До ВНК, м (мин.)": round(min(d["d_owc"] for d in vert), 1) if vert else "—",
+                              "Под барьером, срезов": sum(1 for d in vert if d.get("barrier")) if vert else "—",
                               "Фронт неустойчив (Дитц), срезов": f"{len(unstable)} из {len(vert)}" if vert else "—"})
         if brows:
             st.dataframe(pd.DataFrame(brows), hide_index=True, use_container_width=True)

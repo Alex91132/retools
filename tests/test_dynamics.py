@@ -119,3 +119,40 @@ def test_gas_cap_breakthrough_near_goc(well):
     assert any(v.get("bt_g") for v in f.slice_info.values() if v.get("opened"))
     g = forecast(case, obj, pal, wc.laterals[0], wc.l_total, displacement="bl", goc_tvd=1500, **kw)
     assert not any(v.get("bt_g") for v in g.slice_info.values())
+
+
+def _oil_bt(f):
+    o = [v for v in f.slice_info.values() if v.get("opened")]
+    bt = sorted(v["bt_w"] for v in o if v.get("bt_w"))
+    return f.cum_oil, (bt[0] if bt else None), {v.get("src_w") for v in o if v.get("src_w")}
+
+
+def test_water_source_switch(well):
+    """Доля подошвенной воды: 0 — как без ВНК (только сбоку), 1 — конус снизу, смешанная — между ними."""
+    case, obj, pal, wc = well
+    kw = dict(KW, months=48, displacement="bl")
+    run = lambda **k: forecast(case, obj, pal, wc.laterals[0], wc.l_total, **kw, **k)   # noqa: E731
+    lat = run()
+    side = run(owc_tvd=1612, bottom_share=0.0)
+    bottom = run(owc_tvd=1612, bottom_share=1.0)
+    mixed = run(owc_tvd=1612, bottom_share=0.5)
+    assert side.cum_oil == pytest.approx(lat.cum_oil, rel=1e-12)
+    o_b, bt_b, src_b = _oil_bt(bottom)
+    o_m, bt_m, _ = _oil_bt(mixed)
+    o_s, bt_s, src_s = _oil_bt(side)
+    assert o_b < o_m < o_s and bt_b < bt_m < bt_s
+    assert src_b == {"снизу"} and src_s == {"сбоку"}
+
+
+def test_barrier_blocks_cone_monotonically(well):
+    case, obj, pal, wc = well
+    kw = dict(KW, months=48, displacement="bl", owc_tvd=1612, bottom_share=1.0)
+    run = lambda perm: forecast(case, obj, pal, wc.laterals[0], wc.l_total,                  # noqa: E731
+                                barrier=None if perm is None else dict(top_tvd=1610.5, thickness=1.0, perm=perm), **kw)
+    oil = {p: run(p).cum_oil for p in (None, 1.0, 0.01, 0.001, 0.0)}
+    assert oil[1.0] == pytest.approx(oil[None], rel=1e-9)            # проницаемый прослой не мешает
+    assert oil[None] <= oil[0.01] <= oil[0.001] <= oil[0.0] + 1.0    # чем плотнее барьер, тем меньше конус
+    side = forecast(case, obj, pal, wc.laterals[0], wc.l_total, **dict(kw, bottom_share=0.0))
+    assert oil[0.0] == pytest.approx(side.cum_oil, rel=1e-9)         # непроницаемый — вся вода сбоку
+    f = run(0.0)
+    assert any(v.get("barrier") for v in f.slice_info.values())

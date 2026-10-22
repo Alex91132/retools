@@ -50,6 +50,8 @@ from dataclasses import dataclass, field, replace
 from .field_object import FieldObject, JdSectionPallets
 from .interp import Curve
 from .object_builder import mbe_table
+from .dynamics import (DARCY, bl_table, crossflow_eps, dietz_critical_rate, gas_oil_kr, gravity_number,
+                       water_oil_kr)
 from .rigis import compute
 
 DAYS_IN_MONTH = 30.4
@@ -129,6 +131,8 @@ class _St:
     sw: float             # текущая Sw у забоя
     sg: float = 0.0       # Sg у забоя от ГНК (0 — по матбалансу)
     w_in: float = 0.0     # пришедшая вода, м³ пластовых
+    w_in_v: float = 0.0   # из неё снизу (от ВНК)
+    w_in_h: float = 0.0   # из неё сбоку (законтурная, ППД)
     g_in: float = 0.0     # пришедший газ шапки, м³ пластовых
     bt_w: int | None = None
     bt_g: int | None = None
@@ -138,7 +142,8 @@ def forecast(cases, obj: FieldObject, pallets: JdSectionPallets, comps, l_total:
              vrr: float = 0.0, k_oper: float = 1.0, q_min: float = 0.0, wc_max: float = 98.0,
              zones=None, leak: float = 0.0, leak_growth: float = 0.0, extra_voidage: float = 0.0,
              displacement: str = "piston", owc_tvd: float | None = None, goc_tvd: float | None = None,
-             crossflow: bool = False, trans_mult: float = 1.0) -> Forecast:
+             crossflow: bool = False, trans_mult: float = 1.0, bottom_share: float | None = None,
+             barrier: dict | None = None) -> Forecast:
     """Помесячный прогноз для компоновки (cases — стволы, comps — Completion по стволам).
 
     leak — доля потенциала изолированных срезов, приходящая в фильтры через пакеры
@@ -148,9 +153,11 @@ def forecast(cases, obj: FieldObject, pallets: JdSectionPallets, comps, l_total:
     displacement — «piston» (упрощённое) или «bl» (Баклей–Леверетт, конусы от
     owc_tvd / goc_tvd — абс. отметки, м); crossflow — перетоки по пласту вдоль
     ствола (trans_mult — множитель проводимости).
+    bottom_share — доля компенсации, приходящая подошвенной водой снизу от ВНК
+    (остальное — сбоку: законтурная вода, ППД); None — 1 при заданном ВНК, иначе 0.
+    barrier — прослой под (над) стволом: {"top_tvd", "thickness", "perm"} (АО, м, мД;
+    perm = 0 — непроницаемый).
     """
-    from .dynamics import (bl_table, crossflow_eps, dietz_critical_rate, gas_oil_kr, gravity_number,
-                           water_oil_kr)
     if not isinstance(cases, (list, tuple)):
         cases, comps = [cases], [comps]
     zones = zones or [None] * len(cases)
@@ -161,6 +168,8 @@ def forecast(cases, obj: FieldObject, pallets: JdSectionPallets, comps, l_total:
     l_tot = max(l_total, 1e-6)
     m_cap = prm.get("gas_cap_m", 0.0) or 0.0
     bl = displacement == "bl"
+    if bottom_share is None:
+        bottom_share = 1.0 if owc_tvd is not None else 0.0
     st: list[_St] = []
     res0 = [compute(c, obj, pallets, z, l_total=l_tot) for c, z in zip(cases, zones)]
     for li, (c, comp, res) in enumerate(zip(cases, comps, res0)):
@@ -189,6 +198,8 @@ def forecast(cases, obj: FieldObject, pallets: JdSectionPallets, comps, l_total:
     by_lat = {li: [x for x in st if x.li == li] for li in range(len(cases))}
     out, cum_o, cum_l, stop, p_ref = [], 0.0, 0.0, "горизонт прогноза", p_ref0
     days = DAYS_IN_MONTH * k_oper
+    ctx = dict(prm=prm, cfg=cfg, info=info, owc_tvd=owc_tvd, goc_tvd=goc_tvd, vrr=vrr, m_cap=m_cap, rho_w=rho_w,
+               bottom_share=min(max(bottom_share, 0.0), 1.0), barrier=barrier)
     for m in range(1, months + 1):
         p_ratio = p_ref / p_ref0
         eps = leak_at(m, leak, leak_growth)
@@ -247,8 +258,7 @@ def forecast(cases, obj: FieldObject, pallets: JdSectionPallets, comps, l_total:
             if not bl:
                 x.sw = min(x.sw + vrr * d_np * bo / x.pv, x.sw_max)
                 continue
-            _bl_step(x, m, cases[x.li], r, d_np * bo + d_wp * BW, days, vrr, owc_tvd, goc_tvd, m_cap, rho_w,
-                     prm, cfg, info, bl_table, dietz_critical_rate, gas_oil_kr, gravity_number, water_oil_kr)
+            _bl_step(x, m, cases[x.li], r, d_np * bo + d_wp * BW, days, ctx)
         extra += extra_voidage * days
         np_eff = np0 + (1 - vrr) * 100 * (sum(cum_np.values()) + extra) / total_oip
         p_ref = max(p_of_np(np_eff), 1.0)
@@ -258,73 +268,105 @@ def forecast(cases, obj: FieldObject, pallets: JdSectionPallets, comps, l_total:
     return Forecast(out, total_oip * rho / 1000, stop, rho, slice_q, {(x.li, x.k) for x in opened}, info)
 
 
-def _bl_step(x: _St, m: int, c, r, void: float, days: float, vrr: float, owc_tvd, goc_tvd, m_cap: float,
-             rho_w: float, prm: dict, cfg: dict, info: dict, bl_table, dietz_critical_rate, gas_oil_kr,
-             gravity_number, water_oil_kr) -> None:
-    """Шаг Баклея–Леверетта для среза: вода (снизу от ВНК или с латерали) и газ шапки (сверху от ГНК)."""
+def _barrier_between(barrier, upper: float, lower: float):
+    """Барьер (кровля, толщина, проницаемость) целиком между отметками upper < lower или None."""
+    if not barrier:
+        return None
+    top, thick = barrier.get("top_tvd"), barrier.get("thickness", 0.0) or 0.0
+    if top is None or thick <= 0:
+        return None
+    return barrier if (upper <= top and top + thick <= lower) else None
+
+
+def _bl_step(x: _St, m: int, c, r, void: float, days: float, ctx: dict) -> None:
+    """Шаг Баклея–Леверетта для среза.
+
+    Вода: компенсация VRR·отбор делится на подошвенную (доля bottom_share, конус
+    снизу от ВНК) и боковую (фронт с латерали — законтурная вода, ППД). Барьер
+    между стволом и ВНК пропускает вверх не больше Дарси-потока через прослой при
+    депрессии среза (гравитационное число и предел Дитца — по проницаемости
+    самого столба: прослой тонкий), остальное обходит барьер и приходит сбоку. Насыщенность у
+    забоя — по фронту, пришедшему раньше. Газ шапки — сверху от ГНК (через барьер,
+    если он между ГНК и срезом, — тоже ограниченно).
+    """
     s = c.slices[x.k]
     pt = r.pvt
+    prm, cfg, info = ctx["prm"], ctx["cfg"], ctx["info"]
+    owc_tvd, goc_tvd = ctx["owc_tvd"], ctx["goc_tvd"]
     mid = (s.top_tvd + s.bottom_tvd) / 2 if s.bottom_tvd > 0 else 0.0
     area_v = s.h * 2 * max(r.r_contour, 1e-6)
     k_v = s.perm * c.defaults.kv_kh
     rho_o = (cfg["gamma_oil"] * 1000 + pt["rs"] * RHO_AIR * cfg["gamma_gas"]) / pt["bo"]
-    # вода
-    d_w = vrr * void
-    x.w_in += d_w
+    d_rho = ctx["rho_w"] - rho_o
     krw, kro = water_oil_kr(prm, r.kvo, r.kvcr, r.kno)
-    vertical = owc_tvd is not None and 0 < mid < owc_tvd
-    if vertical:
-        pv_w = area_v * (owc_tvd - mid) * s.phi
-        ng = gravity_number(k_v, area_v, rho_w - rho_o, pt["mu_o"], d_w / days)
-    else:
-        pv_w, ng = x.pv, 0.0
+    # вода: снизу и сбоку
+    d_w = ctx["vrr"] * void
+    vertical = owc_tvd is not None and 0 < mid < owc_tvd and ctx["bottom_share"] > 0
+    column = (owc_tvd - mid) if vertical else 0.0
+    bar = _barrier_between(ctx["barrier"], mid, owc_tvd) if vertical else None
+    d_v = d_w * ctx["bottom_share"] if vertical else 0.0
+    if bar is not None:
+        q_max = DARCY * (bar.get("perm", 0.0) or 0.0) * area_v * max(r.dp, 0.0) / (pt["mu_w"] * bar["thickness"])
+        d_v = min(d_v, q_max * days)
+    d_h = d_w - d_v
+    x.w_in += d_w
+    x.w_in_v += d_v
+    x.w_in_h += d_h
     key = (x.li, x.k)
     if key not in info:
-        q_crit = (dietz_critical_rate(k_v, area_v, rho_w - rho_o, prm["end_water"], pt["mu_w"], float(kro(x.sw0)),
+        q_crit = (dietz_critical_rate(k_v, area_v, d_rho, prm["end_water"], pt["mu_w"], float(kro(x.sw0)),
                                       pt["mu_o"]) if vertical else math.inf)
-        info[key] = {"vertical": vertical, "pv_w": pv_w, "flux_w": d_w / days, "q_crit_w": q_crit,
-                     "d_owc": (owc_tvd - mid) if vertical else None, "mid_tvd": mid,
+        info[key] = {"vertical": vertical, "pv_w": area_v * column * s.phi if vertical else x.pv,
+                     "flux_w": d_v / days, "q_crit_w": q_crit, "d_owc": column if vertical else None,
+                     "mid_tvd": mid, "barrier": bar is not None,
                      "d_goc": (mid - goc_tvd) if (goc_tvd is not None and mid > goc_tvd) else None,
-                     "front_w": [], "front_g": []}
+                     "front_w": [], "front_h": [], "front_g": [], "src_w": None}
     d = info[key]
-    front = d["front_w"][-1] if d["front_w"] else 0.0
-    if pv_w > 0 and x.w_in > 0:
-        t = bl_table(krw, kro, pt["mu_w"], pt["mu_o"], x.sw0, 1 - r.kno, ng)
-        qi = x.w_in / pv_w
-        s_out = t.outlet(qi)
-        if s_out > x.sw0 + 1e-6 and x.bt_w is None:
-            x.bt_w = m
-        x.sw = min(max(x.sw, s_out), x.sw_max)
-        # доля пути, пройденного фронтом (1 — дошёл до забоя)
-        front = max(front, 1.0 if x.bt_w else (min(qi / t.qi_bt, 1.0) if math.isfinite(t.qi_bt) else 0.0))
-    d["front_w"].append(front)
+    front_v = d["front_w"][-1] if d["front_w"] else 0.0
+    front_h = d["front_h"][-1] if d["front_h"] else 0.0
+    s_out = x.sw0
+    src = None
+    if vertical and x.w_in_v > 0:
+        pv_v = area_v * column * s.phi
+        t = bl_table(krw, kro, pt["mu_w"], pt["mu_o"], x.sw0, 1 - r.kno,
+                     gravity_number(k_v, area_v, d_rho, pt["mu_o"], d_v / days if d_v > 0 else 0.0))
+        qi = x.w_in_v / pv_v
+        s_v = t.outlet(qi)
+        front_v = max(front_v, 1.0 if s_v > x.sw0 + 1e-6 else (min(qi / t.qi_bt, 1.0) if math.isfinite(t.qi_bt) else 0.0))
+        if s_v > s_out:
+            s_out, src = s_v, "снизу"
+    if x.w_in_h > 0 and x.pv > 0:
+        t = bl_table(krw, kro, pt["mu_w"], pt["mu_o"], x.sw0, 1 - r.kno, 0.0)
+        qi = x.w_in_h / x.pv
+        s_h = t.outlet(qi)
+        front_h = max(front_h, 1.0 if s_h > x.sw0 + 1e-6 else (min(qi / t.qi_bt, 1.0) if math.isfinite(t.qi_bt) else 0.0))
+        if s_h > s_out:
+            s_out, src = s_h, "сбоку"
+    if s_out > x.sw0 + 1e-6 and x.bt_w is None:
+        x.bt_w = m
+        d["src_w"] = src
+    x.sw = min(max(x.sw, s_out), x.sw_max)
+    d["front_w"].append(front_v)
+    d["front_h"].append(front_h)
+    # газ шапки
     front_g = d["front_g"][-1] if d["front_g"] else 0.0
-    _gas_step(x, m, c, r, s, pt, void, days, vrr, goc_tvd, m_cap, mid, area_v, k_v, rho_o, prm, cfg,
-              bl_table, gas_oil_kr, gravity_number, d, front_g)
-
-
-def _gas_step(x, m, c, r, s, pt, void, days, vrr, goc_tvd, m_cap, mid, area_v, k_v, rho_o, prm, cfg,
-              bl_table, gas_oil_kr, gravity_number, d, front_g) -> None:
-    """Газ шапки опускается от ГНК к срезу (Баклей–Леверетт с гравитацией)."""
-    try:
-        _gas_core(x, m, s, r, pt, void, days, vrr, goc_tvd, m_cap, mid, area_v, k_v, rho_o, prm, cfg,
-                  bl_table, gas_oil_kr, gravity_number, d, front_g)
-    finally:
-        if len(d["front_g"]) < len(d["front_w"]):
-            d["front_g"].append(front_g)
-
-
-def _gas_core(x, m, s, r, pt, void, days, vrr, goc_tvd, m_cap, mid, area_v, k_v, rho_o, prm, cfg,
-              bl_table, gas_oil_kr, gravity_number, d, front_g) -> None:
+    m_cap = ctx["m_cap"]
     if goc_tvd is None or m_cap <= 0 or not mid > goc_tvd:
+        d["front_g"].append(front_g)
         return
-    d_g = (1 - vrr) * void * m_cap / (1 + m_cap)
+    d_g = (1 - ctx["vrr"]) * void * m_cap / (1 + m_cap)
+    col_g = mid - goc_tvd
+    bar_g = _barrier_between(ctx["barrier"], goc_tvd, mid)
+    if bar_g is not None:
+        q_max = DARCY * (bar_g.get("perm", 0.0) or 0.0) * area_v * max(r.dp, 0.0) / (pt["mu_g"] * bar_g["thickness"])
+        d_g = min(d_g, q_max * days)
     x.g_in += d_g
-    pv_g = area_v * (mid - goc_tvd) * s.phi
+    pv_g = area_v * col_g * s.phi
     if pv_g <= 0 or x.g_in <= 0:
+        d["front_g"].append(front_g)
         return
     rho_g = RHO_AIR * cfg["gamma_gas"] / max(pt["bg"], 1e-9)
-    ng_g = gravity_number(k_v, area_v, rho_o - rho_g, pt["mu_o"], d_g / days)
+    ng_g = gravity_number(k_v, area_v, rho_o - rho_g, pt["mu_o"], d_g / days if d_g > 0 else 0.0)
     krg, kro_g = gas_oil_kr(prm, r.kvo, x.sw)
     sg0 = max(r.sg, 0.0) if x.sg <= 0 else 0.0
     tg = bl_table(krg, kro_g, pt["mu_g"], pt["mu_o"], sg0, 1 - x.sw - prm["sorg_og"], ng_g)
