@@ -240,6 +240,13 @@ def _settings(case: RigisCase) -> RigisCase:
                                             owc_offset=owc_off)
         st.session_state["wc_mode"] = "filter" if wc_mode.startswith("для каждого") else "well"
         st.session_state["gas_offset"] = gas_offset
+        x1, x2 = st.columns([3, 2])
+        crossflow = x1.checkbox("Перетоки по пласту вдоль ствола", value=True,
+                                help="Изолированный срез отдаёт к ближайшему фильтру долю потенциала через "
+                                     "соседние срезы пласта; неколлектор — барьер. В книге этого нет.")
+        trans_mult = x2.number_input("Проводимость вдоль ствола, доля", 0.0, 1.0, 1.0, 0.05,
+                                     help="Калибровка: 1 — пласт однородный, меньше — есть непроницаемые прослои")
+        st.session_state["crossflow"] = dict(crossflow=crossflow, trans_mult=trans_mult)
         use_regr = st.checkbox("Петрофизика по регрессиям объекта (Кво, Кно, Квкрит от Кп и Кпр)",
                                value=any(asdict(case.regressions).values()))
         rules = replace(r, max_wc=max_wc, min_filter=min_filter, min_gap=min_gap, elastomer=elastomer,
@@ -330,8 +337,124 @@ def _lateral_block(case, comp, mode_txt, key="auto"):
         st.dataframe(pd.DataFrame([{"Кровля, м": round(i.top, 1), "Подошва, м": round(i.bottom, 1),
                                     "Причина": i.reason, "Потенциал Qж": round(i.q_liq, 1), "Потенциал Qн": round(i.q_oil, 1),
                                     "Обв., %": round(i.water_cut, 0),
+                                    "Переток по пласту, %": round(i.cross_frac * 100),
                                     "Пакеры": "; ".join(f"{a:.1f}–{b:.1f}" for a, b in i.packers)} for i in comp.isolations]),
                      hide_index=True, use_container_width=True, key=f"iso_{key}")
+
+
+def _watering_map(c_case, comp, fc, li: int, rho: float, title: str):
+    """Тепловая карта: обводнённость каждого среза ствола по месяцам, линии — границы фильтров."""
+    ks = [k for k in range(len(c_case.slices)) if (li, k) in fc.slice_q and fc.slice_q[(li, k)]]
+    if not ks:
+        return None
+    n_m = max(len(fc.slice_q[(li, k)]) for k in ks)
+    y = [(c_case.slices[k].top + c_case.slices[k].bottom) / 2 for k in ks]
+    z = []
+    for k in ks:
+        row = []
+        for t in fc.slice_q[(li, k)]:
+            qo, ql = t[0], t[1]
+            fw = 0.0 if ql <= 0 else max(0.0, min(100.0, 100 * (1 - qo / rho / ql)))
+            row.append(fw)
+        row += [None] * (n_m - len(row))
+        z.append(row)
+    fig = go.Figure(go.Heatmap(x=list(range(1, n_m + 1)), y=y, z=z, zmin=0, zmax=100, colorscale="RdYlGn_r",
+                               colorbar=dict(title="обв., %"),
+                               hovertemplate="месяц %{x}<br>глубина %{y:.1f} м<br>обводнённость %{z:.0f}%<extra></extra>"))
+    for f in comp.filters:
+        for yy in (f.top, f.bottom):
+            fig.add_hline(y=yy, line=dict(color="#1f5f2e", width=1.5))
+    fig.update_yaxes(autorange="reversed", title_text="глубина по стволу, м")
+    fig.update_xaxes(title_text="месяц")
+    fig.update_layout(title=title, height=460, margin=dict(l=10, r=60, t=40, b=10))
+    return fig
+
+
+def _cone_section(c_case, comp, fc, li: int, month: int, owc, goc, rules, title: str):
+    """Разрез вдоль ствола: траектория по абс. отметке, ВНК/ГНК, поднявшаяся вода и опустившийся газ."""
+    sl = c_case.slices
+    pts = [(k, (s.top + s.bottom) / 2, (s.top_tvd + s.bottom_tvd) / 2) for k, s in enumerate(sl) if s.bottom_tvd > 0]
+    if len(pts) < 2:
+        return None
+    md = [p[1] for p in pts]
+    tvd = [p[2] for p in pts]
+    fig = go.Figure()
+    i = month - 1
+    if owc:
+        front = []
+        for k, x_md, z in pts:
+            d = fc.slice_info.get((li, k), {})
+            fw = d.get("front_w") or []
+            frac = fw[min(i, len(fw) - 1)] if fw and d.get("vertical") else 0.0
+            front.append(owc - (d.get("d_owc") or 0.0) * frac)
+        fig.add_trace(go.Scatter(x=md, y=[owc] * len(md), mode="lines", line=dict(color="#2f7fd8", width=1),
+                                 name="ВНК", hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=md, y=front, mode="lines", fill="tonexty", fillcolor="rgba(47,127,216,0.35)",
+                                 line=dict(color="#2f7fd8", width=1.5), name="вода (фронт)",
+                                 hovertemplate="%{x:.0f} м<br>фронт воды %{y:.1f} м АО<extra></extra>"))
+    if goc:
+        front = []
+        for k, x_md, z in pts:
+            d = fc.slice_info.get((li, k), {})
+            fg = d.get("front_g") or []
+            frac = fg[min(i, len(fg) - 1)] if fg and d.get("d_goc") is not None else 0.0
+            front.append(goc + (d.get("d_goc") or 0.0) * frac)
+        fig.add_trace(go.Scatter(x=md, y=[goc] * len(md), mode="lines", line=dict(color="#d64545", width=1),
+                                 name="ГНК", hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=md, y=front, mode="lines", fill="tonexty", fillcolor="rgba(214,69,69,0.30)",
+                                 line=dict(color="#d64545", width=1.5), name="газ (фронт)",
+                                 hovertemplate="%{x:.0f} м<br>фронт газа %{y:.1f} м АО<extra></extra>"))
+    fig.add_trace(go.Scatter(x=md, y=tvd, mode="lines", line=dict(color="#555", width=2), name="ствол",
+                             hovertemplate="%{x:.0f} м по стволу<br>%{y:.1f} м АО<extra></extra>"))
+    for f in comp.filters:
+        seg = [(m_, z) for m_, z in zip(md, tvd) if f.top <= m_ <= f.bottom]
+        if seg:
+            fig.add_trace(go.Scatter(x=[a for a, _ in seg], y=[b for _, b in seg], mode="lines",
+                                     line=dict(color="#2e9d4f", width=7), name="фильтр", showlegend=f is comp.filters[0],
+                                     hoverinfo="skip"))
+    pk = [(a + b) / 2 for iso in comp.isolations for a, b in iso.packers]
+    if pk:
+        import numpy as np
+        fig.add_trace(go.Scatter(x=pk, y=list(np.interp(pk, md, tvd)), mode="markers", name="пакер",
+                                 marker=dict(symbol="square", size=9, color="#e07b00"), hoverinfo="skip"))
+    fig.update_yaxes(autorange="reversed", title_text="абс. отметка, м")
+    fig.update_xaxes(title_text="глубина по стволу, м")
+    fig.update_layout(title=title, height=420, margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=-0.2))
+    return fig
+
+
+def _dynamics_charts(cases, variants, fkw, rho, rules, state):
+    """Раздел «Обводнение ствола и конусы»."""
+    st.markdown("**Обводнение ствола во времени и конусы**")
+    names = [v[0] for v in variants]
+    c1, c2 = st.columns([2, 3])
+    pick = c1.selectbox("Вариант", names, key="dyn_variant")
+    name, w, f, _col = variants[names.index(pick)]
+    if not f.months:
+        st.info("Для этого варианта прогноза нет.")
+        return
+    li = 0
+    if len(cases) > 1:
+        li = c2.selectbox("Ствол", list(range(len(cases))), format_func=lambda i: w.names[i], key="dyn_lateral")
+    fig = _watering_map(cases[li], w.laterals[li], f, li, rho,
+                        f"Обводнённость срезов по месяцам — {name}")
+    if fig is not None:
+        st.plotly_chart(fig, use_container_width=True, key=f"wmap_{name}_{li}")
+        st.caption("Каждая строка — срез РИГИС, цвет — его обводнённость в этом месяце (у изолированных — то, что "
+                   "они отдают перетоком). Тёмно-зелёные линии — границы фильтров. Видно, где и когда к стволу "
+                   "приходит вода.")
+    owc, goc = fkw.get("owc_tvd"), fkw.get("goc_tvd")
+    if fkw.get("displacement") == "bl" and (owc or goc):
+        n = len([m for m in f.months if m.working]) or 1
+        month = st.slider("Месяц разреза", 1, n, n, key=f"dyn_month_{name}")
+        fig = _cone_section(cases[li], w.laterals[li], f, li, month, owc, goc, rules,
+                            f"Разрез вдоль ствола, месяц {month} — {name}")
+        if fig is not None:
+            st.plotly_chart(fig, use_container_width=True, key=f"section_{name}_{li}")
+            st.caption("Вода поднимается от ВНК, газ опускается от ГНК (Баклей–Леверетт с гравитацией). Когда фронт "
+                       "доходит до ствола — прорыв. Масштаб по вертикали растянут.")
+    elif fkw.get("displacement") == "bl":
+        st.caption("Разрез с конусами появится, если задать ВНК или ГНК в «Контактах» (абс. отметка).")
 
 
 def _forecast_settings(case):
@@ -345,7 +468,11 @@ def _forecast_settings(case):
         q_min = f4.number_input("Мин. Qн, т/сут", 0.0, 500.0, 5.0, 1.0)
         wc_max = f5.number_input("Предельная обв., %", 1.0, 100.0, 98.0, 1.0)
         p_wf = f6.number_input("Рзаб в прогнозе, атм", 1.0, 500.0, float(case.defaults.p_wf), 1.0)
-        st.markdown("**Перетоки из изолированных зон** (заколонный переток через пакеры)")
+        disp = st.radio("Вытеснение", ["Баклей–Леверетт: фронт, конусы от ВНК и ГНК",
+                                       "упрощённое: обводнение сразу (как раньше)"], horizontal=True,
+                        help="Баклей–Леверетт: вода (и газ шапки) приходит фронтом; при заданных в «Контактах» "
+                             "ВНК/ГНК — снизу и сверху через столб пласта с гравитацией (конусы).")
+        st.markdown("**Перетоки через пакеры** (негерметичность, износ эластомеров)")
         l1, l2, _ = st.columns([1, 1, 4])
         leak = l1.number_input("Доля потенциала, %", 0.0, 100.0, 0.0, 1.0,
                                help="Какую долю своего дебита изолированный коллектор отдаёт в фильтры; 0 — пакеры герметичны")
@@ -363,7 +490,7 @@ def _forecast_settings(case):
             packer=e3.number_input("Пакер-эластомер, тыс. руб./шт", 0.0, 1e5, d.packer, 10.0),
             fixed=e4.number_input("Прочее на компоновку, тыс. руб.", 0.0, 1e6, d.fixed, 100.0))
     fkw = dict(months=int(years * 12), vrr=vrr, k_oper=k_oper, q_min=q_min, wc_max=wc_max,
-               leak=leak / 100, leak_growth=growth / 100)
+               leak=leak / 100, leak_growth=growth / 100, displacement="bl" if disp.startswith("Баклей") else "piston")
     return fkw, p_wf, econ, int(years)
 
 
@@ -388,6 +515,9 @@ def render():
     fkw, p_wf, econ, years = _forecast_settings(case)
     zones = [(i.top, i.bottom) for i in case.intervals]
     fkw["zones"] = [zones] * len(cases)
+    cf = state.get("crossflow", {"crossflow": True, "trans_mult": 1.0})
+    contacts = state.get("contacts", {})
+    fkw.update(cf, owc_tvd=contacts.get("owc_tvd"), goc_tvd=contacts.get("goc_tvd"))
     fcase = [replace(c, defaults=replace(c.defaults, p_wf=p_wf)) for c in cases]
     st.subheader("3. Подбор")
     goal = st.radio("Цель подбора", list(OBJECTIVES), format_func=OBJECTIVES.get, horizontal=True,
@@ -395,7 +525,7 @@ def render():
                          "перетоков и стоимости компоновки (настройки выше). Ограничения те же, что при подборе на Qн.")
     opts = dict(max_filters=state.get("max_filters", 10), zones=[zones] * len(cases),
                 wc_mode=state.get("wc_mode", "filter"), gas_offset=state.get("gas_offset", 0.0),
-                filter_cost=state.get("filter_cost", 0.0), **state.get("contacts", {}))
+                filter_cost=state.get("filter_cost", 0.0), **state.get("contacts", {}), **cf)
     key = (repr(case), id(obj), id(pal), repr(opts), goal, repr(fkw), p_wf, repr(econ))
     if st.button("Подобрать компоновку", type="primary") or "wcomp" not in state or state.get("comp_key") != key:
         with st.spinner("Подбор…" if goal == "rate" else "Подбор с прогнозом по итерациям…"):
@@ -427,7 +557,9 @@ def render():
     k[4].metric("Фильтров", sum(len(c.filters) for c in wc.laterals))
     k[5].metric("Длина фильтров, м", f"{sum(f.length for c in wc.laterals for f in c.filters):.0f}")
     st.caption(f"Для сравнения, весь коллектор открыт: Qн {ao.q_oil:.1f} т/сут, Qж {ao.q_liq:.1f} м³/сут, "
-               f"Qв {qw(ao):.1f} м³/сут, обв. {ao.water_cut:.1f}%.")
+               f"Qв {qw(ao):.1f} м³/сут, обв. {ao.water_cut:.1f}%."
+               + (f" В итоге подобранной компоновки — переток по пласту из изолированных участков: "
+                  f"Qж {wc.cross_liq:.1f} м³/сут, Qн {wc.cross_oil:.1f} т/сут." if cf["crossflow"] else ""))
     mode_txt = "фильтра" if state.get("wc_mode", "filter") == "filter" else "скважины"
     if len(cases) == 1:
         _lateral_block(cases[0], wc.laterals[0], mode_txt)
@@ -468,7 +600,8 @@ def render():
                   if pd.notna(r["Кровля, м"]) and pd.notna(r["Подошва, м"]) and float(r["Подошва, м"]) > float(r["Кровля, м"])]
             man_ranges.append(sorted(rr))
     man, notes = manual_plan(cases, obj, pal, man_ranges, [zones] * len(cases), max_wc=wc.max_wc,
-                             gas_offset=state.get("gas_offset", 0.0), names=wc.names, **state.get("contacts", {}))
+                             gas_offset=state.get("gas_offset", 0.0), names=wc.names, **state.get("contacts", {}),
+                             **cf)
     n_pk = lambda w: sum(len(i.packers) for c in w.laterals for i in c.isolations)   # noqa: E731
     cmp = []
     for name, w in (("своя", man), ("подобранная", wc), ("всё открыто", ao)):
@@ -540,6 +673,33 @@ def render():
                           "Фильтр, м": round(cap.filter_len), "Глухая труба, м": round(cap.blank_len),
                           "Пакеров": cap.packers, "Компоновка, млн руб.": round(cap.total, 1),
                           "NPV, млн руб.": round(npv(f, econ, cap.total), 1), "Остановка": f.stop_reason})
+    _dynamics_charts(cases, variants, fkw, obj.rho_oil, case.rules, state)
+    if fkw.get("displacement") == "bl":
+        st.markdown("**Прорыв воды и газа по фильтрам** (подобранная компоновка, Баклей–Леверетт)")
+        brows = []
+        for li, (c_case, comp) in enumerate(zip(cases, wc.laterals)):
+            for n_f, flt in enumerate(comp.filters, 1):
+                ks = [k for k, s_ in enumerate(c_case.slices) if flt.top <= s_.top and s_.bottom <= flt.bottom]
+                inf = [fc.slice_info.get((li, k), {}) for k in ks]
+                inf = [d for d in inf if d]
+                if not inf:
+                    continue
+                bw = [d["bt_w"] for d in inf if d.get("bt_w")]
+                bg = [d["bt_g"] for d in inf if d.get("bt_g")]
+                vert = [d for d in inf if d.get("vertical")]
+                unstable = [d for d in vert if d.get("flux_w", 0) > d.get("q_crit_w", float("inf"))]
+                brows.append({"Ствол": wc.names[li], "Фильтр": n_f, "Кровля, м": round(flt.top, 1),
+                              "Подошва, м": round(flt.bottom, 1),
+                              "Прорыв воды, мес": min(bw) if bw else "нет",
+                              "Срезов с прорывом воды": len(bw),
+                              "Прорыв газа, мес": min(bg) if bg else "нет",
+                              "До ВНК, м (мин.)": round(min(d["d_owc"] for d in vert), 1) if vert else "—",
+                              "Фронт неустойчив (Дитц), срезов": f"{len(unstable)} из {len(vert)}" if vert else "—"})
+        if brows:
+            st.dataframe(pd.DataFrame(brows), hide_index=True, use_container_width=True)
+        st.caption("Прорыв — первый месяц, когда фронт вытесняющей фазы дошёл до забоя среза. «Фронт неустойчив» — "
+                   "приток воды к срезу выше критического дебита Дитца: конус растёт. ВНК и ГНК задаются в "
+                   "«Контактах» (абс. отметка); без них — фронт с латерали.")
     st.markdown(f"**Итоги за {years} лет**")
     st.dataframe(pd.DataFrame(econ_rows), hide_index=True, use_container_width=True)
     st.caption(f"НГЗ дренируемого объёма подобранной компоновки: {fc.oip:.0f} тыс. т. Стоимость компоновки — по "

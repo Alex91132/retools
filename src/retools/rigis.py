@@ -175,7 +175,8 @@ def _interval_value(intervals: Sequence[IntervalParams], n: int, attr: str, defa
 
 def compute(case: RigisCase, obj: FieldObject, pallets: JdSectionPallets,
             ranges: Sequence[tuple] | None = None, l_total: float | None = None,
-            p_res_override: Sequence[float] | None = None) -> list[SliceResult]:
+            p_res_override: Sequence[float] | None = None,
+            sg_override: Sequence[float] | None = None) -> list[SliceResult]:
     """Расчёт всех срезов при заданных интервалах компоновки.
 
     ranges — интервалы (кровля, подошва) блока «Выбор» (C:D); по умолчанию — из case.
@@ -185,6 +186,8 @@ def compute(case: RigisCase, obj: FieldObject, pallets: JdSectionPallets,
     работающих срезов; нужна подбору компоновки, где фильтры не совпадают с
     интервалами параметров. None — как в книге (по «Компкол»).
     p_res_override — текущее пластовое давление по срезам (для прогноза во времени).
+    sg_override — газонасыщенность срезов у забоя, если она выше равновесной по
+    матбалансу (прорыв газа от ГНК в прогнозе, dynamics).
     """
     sl = case.slices
     if ranges is None:
@@ -237,6 +240,8 @@ def compute(case: RigisCase, obj: FieldObject, pallets: JdSectionPallets,
         sw = s.sw                                                   # AW
         if not s.is_gas:
             r.sg = 1 - obj.so(r.p_res) / (1 - prm["swi"]) * (1 - sw) - sw   # BI
+        if sg_override is not None and sg_override[k_s] > r.sg:
+            r.sg = min(sg_override[k_s], 1 - sw - 1e-6)
         r.so = 1 - r.sg - sw                                        # BJ
         try:
             r.kro = ph.kro_baker(sw, r.kvo, r.sg, prm["sorg_og"], r.kno, prm["end_oil"], prm["exo_ow"], prm["exo_og"])

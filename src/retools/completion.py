@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .field_object import FieldObject, JdSectionPallets
-from .rigis import RigisCase, SliceResult, compute
+from .rigis import RigisCase, compute
 
 
 @dataclass
@@ -52,6 +52,9 @@ class Isolation:
     water_cut: float
     reason: str           # «вода», «газ», «неколлектор», «перемычка»
     packers: list = field(default_factory=list)   # (кровля, подошва) эластомеров
+    cross_liq: float = 0.0    # приходит к фильтрам по пласту (перетоки вдоль ствола), м³/сут
+    cross_oil: float = 0.0    # т/сут
+    cross_frac: float = 0.0   # доля потенциала участка, приходящая перетоком
 
 
 @dataclass
@@ -65,6 +68,8 @@ class Completion:
     max_wc: float
     iterations: int
     slices: list          # SliceResult при итоговой длине фильтров
+    cross_liq: float = 0.0    # в т. ч. переток по пласту из изолированных участков, м³/сут
+    cross_oil: float = 0.0
 
 
 def _water_cut(q_oil: float, q_liq: float, rho: float) -> float:
@@ -274,8 +279,13 @@ def _choose_multi(lats, rho, max_wc, rules, max_filters, wc_mode, filter_cost=0.
     return best
 
 
-def _build_completion(case, res, segs, rho, max_wc, forbidden, l_total, iterations) -> Completion:
-    """Фильтры, изоляция с пакерами и итоги одного ствола по выбранным отрезкам."""
+def _build_completion(case, res, segs, rho, max_wc, forbidden, l_total, iterations, crossflow: bool = False,
+                      trans_mult: float = 1.0) -> Completion:
+    """Фильтры, изоляция с пакерами и итоги одного ствола по выбранным отрезкам.
+
+    crossflow — изолированные участки отдают к фильтрам долю потенциала по пласту
+    (dynamics.crossflow_eps); итог скважины включает этот переток.
+    """
     rules, sl = case.rules, case.slices
     tops = [s.top for s in sl]
     bots = [s.bottom for s in sl]
@@ -311,9 +321,25 @@ def _build_completion(case, res, segs, rho, max_wc, forbidden, l_total, iteratio
             if lower is not None:
                 iso.packers.append((lower - off - el, lower - off))
         isolations.append(iso)
-    ql = sum(f.q_liq for f in filters)
-    qo = sum(f.q_oil for f in filters)
-    return Completion(filters, isolations, ql, qo, _water_cut(qo, ql, rho), l_total, max_wc, iterations, res)
+    cl = co = 0.0
+    if crossflow and filters:
+        from .dynamics import crossflow_eps
+        open_mask = [False] * len(sl)
+        for a, b in segs:
+            for i in range(a, b + 1):
+                open_mask[i] = True
+        eps = crossflow_eps(sl, res, open_mask, case.defaults.kv_kh, trans_mult)
+        for iso in isolations:
+            idx = [i for i, x in enumerate(sl) if iso.top <= x.top and x.bottom <= iso.bottom and res[i].used]
+            iso.cross_liq = sum(eps[i] * res[i].q_liq for i in idx)
+            iso.cross_oil = sum(eps[i] * res[i].q_oil for i in idx)
+            pot = sum(res[i].q_liq for i in idx)
+            iso.cross_frac = iso.cross_liq / pot if pot > 0 else 0.0
+            cl += iso.cross_liq
+            co += iso.cross_oil
+    ql = sum(f.q_liq for f in filters) + cl
+    qo = sum(f.q_oil for f in filters) + co
+    return Completion(filters, isolations, ql, qo, _water_cut(qo, ql, rho), l_total, max_wc, iterations, res, cl, co)
 
 
 @dataclass
@@ -327,13 +353,16 @@ class WellCompletion:
     l_total: float
     max_wc: float
     iterations: int
+    cross_liq: float = 0.0    # в т. ч. переток по пласту из изолированных участков
+    cross_oil: float = 0.0
 
 
 def plan_multi(cases: list, obj: FieldObject, pallets: JdSectionPallets, max_wc: float | None = None,
                max_filters: int = 10, zones: list | None = None, max_iter: int = 8, wc_mode: str = "filter",
                gas_offset: float = 0.0, names: list | None = None, filter_cost: float = 0.0,
                goc_tvd: float | None = None, goc_offset: float = 0.0, owc_tvd: float | None = None,
-               owc_offset: float = 0.0, weights: list | None = None) -> WellCompletion:
+               owc_offset: float = 0.0, weights: list | None = None, crossflow: bool = False,
+               trans_mult: float = 1.0) -> WellCompletion:
     """Совместный подбор по стволам МЗС (общие: число фильтров, длина секций, предел по скважине).
 
     Коэффициент секции ГС зависит от суммарной эффективной длины фильтров
@@ -342,6 +371,9 @@ def plan_multi(cases: list, obj: FieldObject, pallets: JdSectionPallets, max_wc:
     weights — своя цель по срезам каждого ствола вместо начального Qн (например,
     накопленная нефть или NPV среза, см. lifetime); filter_cost — в её единицах.
     Ограничения по обводнённости — по начальным дебитам.
+    crossflow — учитывать перетоки по пласту вдоль ствола: изолированный срез
+    всё равно отдаёт к фильтрам долю ε своего потенциала, поэтому вскрытие среза
+    даёт только (1 − ε)·Qн; ε зависит от расстановки фильтров — уточняется итерациями.
     """
     rules = cases[0].rules
     max_wc = rules.max_wc if max_wc is None else max_wc
@@ -349,34 +381,65 @@ def plan_multi(cases: list, obj: FieldObject, pallets: JdSectionPallets, max_wc:
     zones = zones or [None] * len(cases)
     forb = [forbidden_mask(c.slices, gas_offset, goc_tvd, goc_offset, owc_tvd, owc_offset) for c in cases]
     l_total = sum(s.h for c, z in zip(cases, zones) for s, r in zip(c.slices, compute(c, obj, pallets, z)) if r.used)
-    chosen, seen, it = None, set(), 0
+    chosen, seen, it, cands = None, set(), 0, []
     for it in range(1, max_iter + 1):
         ress = [compute(c, obj, pallets, z, l_total=max(l_total, 1e-6)) for c, z in zip(cases, zones)]
         lats = [_Lateral([s.top for s in c.slices], [s.bottom for s in c.slices],
                          np.array([r.q_liq for r in res]), np.array([r.q_oil for r in res]), fb)
                 for c, res, fb in zip(cases, ress, forb)]
-        segs = _choose_multi(lats, rho, max_wc, rules, max_filters, wc_mode, filter_cost,
-                             None if weights is None else [np.asarray(w, dtype=float) for w in weights])
+        base = None if weights is None else [np.asarray(w, dtype=float) for w in weights]
+        if crossflow and weights is None and chosen is not None:
+            # первая итерация — оптимум без перетоков; дальше вскрытие среза стоит (1 − ε)·Qн
+            from .dynamics import crossflow_eps
+            base = []
+            for ci, (c, res) in enumerate(zip(cases, ress)):
+                om = [False] * len(c.slices)
+                for a, b in chosen[ci]:
+                    for i in range(a, b + 1):
+                        om[i] = True
+                eps = np.array(crossflow_eps(c.slices, res, om, c.defaults.kv_kh, trans_mult))
+                base.append(np.array([r.q_oil for r in res]) * (1 - eps))
+        segs = _choose_multi(lats, rho, max_wc, rules, max_filters, wc_mode, filter_cost, base)
         new_l = sum(c.slices[k].h for c, res, sg in zip(cases, ress, segs) for a, b in sg for k in range(a, b + 1)
                     if res[k].used)
         key = tuple(tuple(s) for s in segs)
+        cands.append((key, new_l))
         if key == chosen or key in seen:
             chosen = key
             break
         seen.add(key)
         chosen, l_total = key, new_l
-    ress = [compute(c, obj, pallets, z, l_total=max(l_total, 1e-6)) for c, z in zip(cases, zones)]
-    comps = [_build_completion(c, res, list(sg), rho, max_wc, fb, l_total, it)
-             for c, res, sg, fb in zip(cases, ress, chosen, forb)]
+    def build(key, lt):
+        rs = [compute(c, obj, pallets, z, l_total=max(lt, 1e-6)) for c, z in zip(cases, zones)]
+        return [_build_completion(c, res, list(sg), rho, max_wc, fb, lt, it, crossflow, trans_mult)
+                for c, res, sg, fb in zip(cases, rs, key, forb)]
+
+    if crossflow and weights is None and len(cands) > 1:
+        # итерации с перетоками не гарантируют оптимум — берём лучший кандидат по итогу с перетоком
+        best = None
+        for key, lt in dict(cands).items():
+            cs = build(key, lt)
+            qo_, ql_ = sum(c.q_oil for c in cs), sum(c.q_liq for c in cs)
+            ok = wc_mode != "well" or _water_cut(qo_, ql_, rho) <= max_wc + 1e-9
+            if ok and (best is None or qo_ > best[0] + 1e-12):
+                best = (qo_, key, lt, cs)
+        if best is not None:
+            _, chosen, l_total, comps = best
+        else:
+            comps = build(chosen, l_total)
+    else:
+        comps = build(chosen, l_total)
     ql = sum(c.q_liq for c in comps)
     qo = sum(c.q_oil for c in comps)
     names = names or [c.slices[0].well if c.slices else f"ствол {i + 1}" for i, c in enumerate(cases)]
-    return WellCompletion(comps, names, ql, qo, _water_cut(qo, ql, rho), l_total, max_wc, it)
+    return WellCompletion(comps, names, ql, qo, _water_cut(qo, ql, rho), l_total, max_wc, it,
+                          sum(c.cross_liq for c in comps), sum(c.cross_oil for c in comps))
 
 
 def plan(case: RigisCase, obj: FieldObject, pallets: JdSectionPallets, max_wc: float | None = None,
          max_filters: int = 10, zones=None, max_iter: int = 8, wc_mode: str = "filter",
-         gas_offset: float = 0.0, filter_cost: float = 0.0, **contacts) -> Completion:
+         gas_offset: float = 0.0, filter_cost: float = 0.0, crossflow: bool = False, trans_mult: float = 1.0,
+         **contacts) -> Completion:
     """Оптимальная компоновка ствола ГС при пределе обводнённости max_wc, %.
 
     wc_mode — "filter": предел для каждого фильтра (как в книге); "well": для
@@ -386,7 +449,7 @@ def plan(case: RigisCase, obj: FieldObject, pallets: JdSectionPallets, max_wc: f
     zones — интервалы параметров пласта (блок «Выбор»); по умолчанию — из case.
     """
     w = plan_multi([case], obj, pallets, max_wc, max_filters, [zones], max_iter, wc_mode, gas_offset,
-                   filter_cost=filter_cost, **contacts)
+                   filter_cost=filter_cost, crossflow=crossflow, trans_mult=trans_mult, **contacts)
     return w.laterals[0]
 
 
@@ -492,7 +555,7 @@ def split_laterals(case: RigisCase) -> list:
 
 def manual_plan(cases: list, obj: FieldObject, pallets: JdSectionPallets, ranges_per_case: list,
                 zones: list | None = None, max_wc: float = 100.0, gas_offset: float = 0.0,
-                names: list | None = None, **contacts) -> tuple:
+                names: list | None = None, crossflow: bool = False, trans_mult: float = 1.0, **contacts) -> tuple:
     """Компоновка по интервалам, заданным вручную (по стволам), — те же правила подсчёта, что у подбора.
 
     Фильтр вскрывает срезы, середина которых попадает в интервал (границы фильтра —
@@ -548,8 +611,9 @@ def manual_plan(cases: list, obj: FieldObject, pallets: JdSectionPallets, ranges
                   if res[i].used)
     ress = [compute(c, obj, pallets, z, l_total=max(l_total, 1e-6)) for c, z in zip(cases, zones)]
     comps = [_build_completion(c, res, list(sg), rho, max_wc, forbidden_mask(c.slices, gas_offset, **contacts),
-                               l_total, 1) for c, res, sg in zip(cases, ress, segs_all)]
+                               l_total, 1, crossflow, trans_mult) for c, res, sg in zip(cases, ress, segs_all)]
     ql = sum(c.q_liq for c in comps)
     qo = sum(c.q_oil for c in comps)
     names = names or [c.slices[0].well if c.slices else f"ствол {i + 1}" for i, c in enumerate(cases)]
-    return WellCompletion(comps, names, ql, qo, _water_cut(qo, ql, rho), l_total, max_wc, 1), notes
+    return WellCompletion(comps, names, ql, qo, _water_cut(qo, ql, rho), l_total, max_wc, 1,
+                          sum(c.cross_liq for c in comps), sum(c.cross_oil for c in comps)), notes

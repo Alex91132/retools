@@ -80,8 +80,10 @@ def slice_weights(cases, fc: Forecast, objective: str, econ: Economics, lam: flo
         out.append(w)
     for (li, k), series in fc.slice_q.items():
         v = 0.0
-        for m, (qo, ql, bo) in zip(worked, series):
-            gain = (1 - m.leak) * m.days
+        for m, t in zip(worked, series):
+            qo, ql, bo = t[:3]
+            e_closed = t[3] if len(t) > 3 else m.leak   # доля, которую срез отдал бы закрытым (пакеры и пласт)
+            gain = (1 - e_closed) * m.days
             void = qo / fc.rho + max(ql - qo / fc.rho, 0.0) * BW / bo
             if objective == "npv":
                 v += gain * daily_value(qo, ql, fc.rho, econ) / 1e6 * discount_factor(m.month, econ.discount)
