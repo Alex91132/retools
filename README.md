@@ -39,6 +39,7 @@
 |---|---|
 | ![Планшет](docs/img/03_planshet.jpg) | ![Своя компоновка](docs/img/05_manual.jpg) |
 | ![Обводнение ствола по месяцам](docs/img/10_watering_map.jpg) | ![Разрез вдоль ствола: конусы от ВНК и ГНК](docs/img/11_cone_section.jpg) |
+| ![Вытеснение и источник воды](docs/img/14_forecast_settings.jpg) | ![Разрез с непроницаемым барьером](docs/img/15_barrier_section.jpg) |
 | ![Прогноз](docs/img/06_forecast.jpg) | ![Расчёт добычи](docs/img/09_gtm_well.jpg) |
 
 ## Быстрый старт
