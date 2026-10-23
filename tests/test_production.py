@@ -11,7 +11,7 @@ from retools.production import produce
 BOOK = os.environ.get("RETOOLS_BOOK", "")
 
 
-def vankor_well() -> GtmWell:
+def sample_well() -> GtmWell:
     """Скважина №1 из рейтинга ГТМ (кэш книги, адаптированная для движка).
 
     В книге flood_share=0.99 (99% толщин заводняются) — при такой доле истощаемая
@@ -31,7 +31,7 @@ def vankor_well() -> GtmWell:
 
 
 def test_produces_positive_rates():
-    p = produce(vankor_well(), n_months=24)
+    p = produce(sample_well(), n_months=24)
     assert len(p.months) == 24
     qn = [m.q_oil for m in p.months]
     assert all(q > 0 for q in qn[:12]), "первые 12 месяцев добыча > 0"
@@ -39,7 +39,7 @@ def test_produces_positive_rates():
 
 def test_declining_profile():
     """Дебит нефти убывает (истощение + рост обводнённости)."""
-    p = produce(vankor_well(), n_months=36)
+    p = produce(sample_well(), n_months=36)
     qn = [m.q_oil for m in p.months]
     assert qn[0] > qn[6] > qn[12], "профиль убывает"
     assert qn[0] > qn[-1]
@@ -47,29 +47,29 @@ def test_declining_profile():
 
 def test_water_cut_rises():
     """Обводнённость растёт от месяца к месяцу."""
-    p = produce(vankor_well(), n_months=24)
+    p = produce(sample_well(), n_months=24)
     wc = [m.water_cut for m in p.months]
     assert wc[0] < wc[-1]
 
 
 def test_pressure_declines():
     """Рпл падает с накопленным отбором."""
-    p = produce(vankor_well(), n_months=24)
+    p = produce(sample_well(), n_months=24)
     pres = [m.p_res for m in p.months]
     assert pres[0] >= pres[-1]
 
 
 def test_cumulative_monotonic():
-    p = produce(vankor_well(), n_months=24)
+    p = produce(sample_well(), n_months=24)
     cum = [m.cum_oil for m in p.months]
     assert cum == sorted(cum)
 
 
 def test_waterflood_supports_pressure():
     """С ППД (VRR>0) Рпл держится выше, чем без него."""
-    w1 = vankor_well()
+    w1 = sample_well()
     w1.vrr_target = 1.0
-    w2 = vankor_well()
+    w2 = sample_well()
     w2.vrr_target = 0.0
     p1 = produce(w1, n_months=24)
     p2 = produce(w2, n_months=24)
