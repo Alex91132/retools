@@ -7,8 +7,9 @@ import pytest
 
 from retools.rigis import Regressions, compute
 from retools.rigis_io import detect_columns, load_project, read_rigis_table, save_project
+from retools.resources import data_dir, data_path
 
-FIX = Path(__file__).parent / "fixtures"
+FIX = data_dir()
 HEADER = ["No скважины", "свита / пласт", "Кровля,  ИГ", "Подошва, ИГ", "Кровля, АО", "Подошва, АО", "Мощность",
           "УЭС, Омм", "Кп общ (PHIT)", "Кп для расчёта", "Кгл", "Кпр для расчёта", "Кв для расчёта", "Кн",
           "Характер\nнасыщения", "Коллектор *"]

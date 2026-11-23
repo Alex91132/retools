@@ -3,9 +3,15 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .venv*/
+build/
+dist/
+pip-build-env-*/
+pip-build-tracker-*/
+pip-ephem-wheel-cache-*/
+pip-modern-metadata-*/
+pytest-of-*/
 data/
 *.xlsm
 *.xlsx
 !tests/fixtures/*.xlsx
-
 !examples/*.xlsx

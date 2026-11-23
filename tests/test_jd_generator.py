@@ -11,8 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2].parent / "reservoir-c
 pytest.importorskip("reservoir_core", reason="нужен пакет reservoir_core (ядро Laplace) — необязательная зависимость")
 
 from retools.jd_generator import get_l_norm, generate_pairs  # noqa: E402
+from retools.resources import data_dir, data_path
 
-FIXTURE = json.loads((Path(__file__).parent / "jd_pallets_fixture.json").read_text(encoding="utf-8"))
+FIXTURE = json.loads((data_path("jd_pallets_fixture.json")).read_text(encoding="utf-8"))
 PAIRS = FIXTURE["pairs"]
 
 

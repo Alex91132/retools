@@ -4,13 +4,14 @@ import json
 import math
 from pathlib import Path
 
+from retools.resources import data_dir, data_path
 from retools.pvt_mbe import (
     ControlFluid, corey_kro, corey_krw, eff_mu, eff_fvf, frac_flow,
     kro_baker, mbe_lhs, mbe_rhs, rp_from_relperm, sw_from_fw,
     total_compressibility,
 )
 
-FIXTURE = json.loads((Path(__file__).parent / "mbe_fixture.json").read_text(encoding="utf-8"))
+FIXTURE = json.loads((data_path("mbe_fixture.json")).read_text(encoding="utf-8"))
 
 
 # ---------- ОФП Кори и обводнённость ----------

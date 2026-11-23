@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """retools — порт расчётника RE Tools (VBA/Excel) на Python.
 
-MVP по первым четырём вкладкам исходной книги:
-- fa: факторный анализ отклонений Qн (лист «ФА»);
-- jd: безразмерная продуктивность Jd и эквивалент трещины ГРП (Get_Jd/Get_x_f);
-- intervals: модель данных интервалов РИГИС (лист «РИГИС»).
+Покрывает вкладки книги: «РИГИС» (подбор компоновки ГС/МЗС), «PVT_MBE_Waterflood»
+(PVT, матбаланс, палетки заводнения), «Нормировка Jd ГС по секциям», «Рейтинг ГТМ»,
+«Расчёт добычи», «ФА». Статус по вкладкам и известные расхождения — docs/PORTING.md.
 """
 from .fa import Scenario, FactorResult, decompose, factors_sorted
 from .intervals import Interval, WellIntervals

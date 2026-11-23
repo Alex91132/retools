@@ -12,8 +12,9 @@ from pathlib import Path
 import pytest
 
 from retools.productivity import fast_ik0, get_completion, get_j, stehfest_coef
+from retools.resources import data_dir, data_path
 
-FIX = Path(__file__).parent / "fixtures"
+FIX = data_dir()
 ROWS = json.loads((FIX / "production_book.json").read_text(encoding="utf-8"))["rating"]
 TOL = {"ННС": 1e-10, "ННС+ГРП": 1e-8, "ГС": 1e-4, "ГС+ГРП": 3e-5, "МЗС": 1e-5}
 ARGS = ("P", "N", "T", "U", "AJ", "AF", "AG", "M", "O", "AH", "DC", "DD", "DE", "Y", "AB", "AC", "AA", "W", "X", "V")

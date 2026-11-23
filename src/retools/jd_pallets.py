@@ -17,9 +17,9 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from pathlib import Path
+from .resources import data_path
 
-FIXTURE = Path(__file__).resolve().parents[2] / "tests" / "jd_pallets_fixture.json"
+FIXTURE = data_path("jd_pallets_fixture.json")
 
 
 @dataclass(frozen=True)

@@ -8,10 +8,11 @@ import pytest
 from retools.field_object import PARAM_ROWS
 from retools.object_builder import build_object
 from retools.rigis_io import load_project
+from retools.resources import data_dir, data_path
 from retools.waterflood import (DP_SCHEDULE, NPZ_GRID, WC_GRID, depletion_rows, fdp_pallets, flood_rows,
                                 initial_pvt, pvt_rows, sw_axis, xl_round)
 
-FIX = Path(__file__).parent / "fixtures"
+FIX = data_dir()
 
 
 @pytest.fixture(scope="module")

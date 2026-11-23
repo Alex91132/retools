@@ -9,8 +9,9 @@ import math
 from pathlib import Path
 
 from retools.cpvt import CPVT
+from retools.resources import data_dir, data_path
 
-FIXTURE = json.loads((Path(__file__).parent / "cpvt_fixture.json").read_text(encoding="utf-8"))
+FIXTURE = json.loads((data_path("cpvt_fixture.json")).read_text(encoding="utf-8"))
 
 
 def control_fluid() -> CPVT:

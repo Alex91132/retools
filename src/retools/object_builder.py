@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass
 
 from scipy.optimize import brentq
@@ -26,7 +25,7 @@ from scipy.optimize import brentq
 from . import rigis_physics as ph
 from .cpvt import CPVT, z_gas
 from .field_object import FieldObject, JdSectionPallets, JD_THICKNESS
-from .interp import Curve, Grid2D
+from .interp import Grid2D
 
 T_K_MIN = 273
 ATMA_MPA = 0.101325

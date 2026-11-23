@@ -5,8 +5,9 @@ import math
 from pathlib import Path
 
 from retools.jd_pallets import Pallet, default_pallet
+from retools.resources import data_dir, data_path
 
-FIXTURE = Path(__file__).parent / "jd_pallets_fixture.json"
+FIXTURE = data_path("jd_pallets_fixture.json")
 
 
 def golden_rows():

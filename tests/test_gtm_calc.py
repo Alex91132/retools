@@ -8,8 +8,9 @@ import pytest
 
 import retools.gtm_calc as G
 from retools.gtm_calc import ObjectSheet, production_rows, rating_row, result_by_month
+from retools.resources import data_dir, data_path
 
-FIX = Path(__file__).parent / "fixtures"
+FIX = data_dir()
 BOOK = json.loads((FIX / "production_book.json").read_text(encoding="utf-8"))
 OBJ = ObjectSheet.from_book(json.loads((FIX / "pvt_mbe_book.json").read_text(encoding="utf-8")))
 # Get_J ГС-семейства плохо обусловлен (см. test_productivity) — допуск по типу заканчивания

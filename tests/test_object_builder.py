@@ -9,8 +9,9 @@ from retools.object_builder import (JdPalletSettings, build_jd_pallets, build_ob
                                     mbe_table, pressure_grid)
 from retools.rigis import Regressions, compute
 from retools.rigis_io import load_project
+from retools.resources import data_dir, data_path
 
-FIX = Path(__file__).parent / "fixtures"
+FIX = data_dir()
 
 
 @pytest.fixture(scope="module")

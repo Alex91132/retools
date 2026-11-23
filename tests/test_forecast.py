@@ -7,8 +7,9 @@ import pytest
 from retools.completion import plan
 from retools.forecast import DAYS_IN_MONTH, forecast
 from retools.rigis_io import load_project
+from retools.resources import data_dir, data_path
 
-FIX = Path(__file__).parent / "fixtures"
+FIX = data_dir()
 
 
 @pytest.fixture(scope="module")

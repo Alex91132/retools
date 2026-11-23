@@ -12,8 +12,9 @@ from retools.dynamics import bl_table, crossflow_eps, dietz_critical_rate, gravi
 from retools.forecast import forecast
 from retools.rigis import compute
 from retools.rigis_io import load_project
+from retools.resources import data_dir, data_path
 
-FIX = Path(__file__).parent / "fixtures"
+FIX = data_dir()
 COREY_W = lambda s: np.asarray(s) ** 2           # noqa: E731
 COREY_O = lambda s: (1 - np.asarray(s)) ** 2     # noqa: E731
 
@@ -31,7 +32,8 @@ def test_welge_average_equals_produced_oil():
     t = bl_table(COREY_W, COREY_O, 1.0, 1.0, 0.0, 1.0, n=4001)
     qs = np.linspace(0, 2.0, 20001)
     fo = [1 - t.frac(t.outlet(q)) if q >= t.qi_bt else 1.0 for q in qs]
-    assert np.trapz(fo, qs) == pytest.approx(t.average(2.0) - t.s_i, rel=1e-3)
+    trapz = getattr(np, "trapezoid", None) or getattr(np, "trapz")   # NumPy 2 убрал trapz
+    assert trapz(fo, qs) == pytest.approx(t.average(2.0) - t.s_i, rel=1e-3)
 
 
 def test_gravity_delays_breakthrough():

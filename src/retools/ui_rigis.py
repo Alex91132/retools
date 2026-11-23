@@ -13,6 +13,8 @@ import tempfile
 from dataclasses import asdict, replace
 from pathlib import Path
 
+from .resources import data_path
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -28,7 +30,7 @@ from .report import well_xlsx
 from .rigis import CompletionRules, Defaults, IntervalParams, Regressions, RigisCase, compute, read_case_from_book
 from .rigis_io import case_from_dict, case_to_dict, load_project, read_rigis_table, save_project
 
-DEMO = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "rigis_4210H_project.json"
+DEMO = data_path("rigis_4210H_project.json")
 SAT_COLORS = {"нефть": "#2e9d4f", "нефть+вода": "#7fb46a", "вода": "#2f7fd8", "газ": "#d64545",
               "разгазирование": "#e39b32"}
 LINER_COLORS = {"фильтр": "#2e9d4f", "эластомер": "#e07b00", "глухая труба": "#9aa0a6"}

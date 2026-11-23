@@ -18,6 +18,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from .resources import data_path
+
 import openpyxl
 
 BOOK_SHEET = "PVT_MBE_Waterflood"
@@ -78,9 +80,8 @@ def read_pallets(book_path: str | Path) -> dict[str, Grid]:
 
 
 def default_pallets() -> dict[str, Grid]:
-    """Палетки контрольного примера книги (из фикстуры тестов)."""
-    data = json.loads((Path(__file__).resolve().parents[2] / "tests"
-                       / "pallets_fixture.json").read_text(encoding="utf-8"))
+    """Палетки контрольного примера книги (данные пакета, работают и из wheel)."""
+    data = json.loads(data_path("pallets_fixture.json").read_text(encoding="utf-8"))
     return {k: Grid(x=tuple(v["x"]), y=tuple(v["y"]),
                     f=tuple(tuple(row) for row in v["f"]))
             for k, v in data.items()}

@@ -14,6 +14,8 @@ import json
 import tempfile
 from pathlib import Path
 
+from .resources import data_dir
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -21,7 +23,7 @@ from plotly.subplots import make_subplots
 
 from .gtm_calc import ObjectSheet, production_rows, rating_row, result_by_month
 
-FIX = Path(__file__).resolve().parents[2] / "tests" / "fixtures"
+FIX = data_dir()
 
 # столбцы рейтинга, которые редактируются в таблице: (буква, заголовок)
 RATING_FIELDS = [

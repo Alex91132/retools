@@ -10,8 +10,9 @@ from retools.forecast import forecast
 from retools.lifetime import plan_lifetime, slice_weights
 from retools.rigis import compute
 from retools.rigis_io import load_project
+from retools.resources import data_dir, data_path
 
-FIX = Path(__file__).parent / "fixtures"
+FIX = data_dir()
 FKW = dict(months=60, vrr=0.8, k_oper=0.95, q_min=5)
 
 

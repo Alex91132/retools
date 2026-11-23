@@ -13,8 +13,9 @@ import pytest
 from retools import rigis_physics as ph
 from retools.rigis import Regressions, Slice, assign_intervals, compute
 from retools.rigis_io import load_project
+from retools.resources import data_dir, data_path
 
-FIX = Path(__file__).parent / "fixtures"
+FIX = data_dir()
 
 
 @pytest.fixture(scope="module")
