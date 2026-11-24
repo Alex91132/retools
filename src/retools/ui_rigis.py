@@ -30,6 +30,12 @@ from .report import well_xlsx
 from .rigis import CompletionRules, Defaults, IntervalParams, Regressions, RigisCase, compute, read_case_from_book
 from .rigis_io import case_from_dict, case_to_dict, load_project, read_rigis_table, save_project
 
+
+def _fmt(value: float, digits: int = 1) -> str:
+    """Число в русском виде: 1 234,5."""
+    return f"{value:,.{digits}f}".replace(",", " ").replace(".", ",")
+
+
 DEMO = data_path("rigis_4210H_project.json")
 SAT_COLORS = {"нефть": "#2e9d4f", "нефть+вода": "#7fb46a", "вода": "#2f7fd8", "газ": "#d64545",
               "разгазирование": "#e39b32"}
@@ -63,7 +69,8 @@ def _sources():
                                 "Пример: скважина 4210H", "Пример МЗС: 2 ствола (синтетика)"], horizontal=True, key="src")
     state = st.session_state
     if src == "Пример: скважина 4210H":
-        if st.button("Открыть пример", key="open_demo") or "case" not in state:
+        label = "Перезагрузить пример" if state.get("source") == "пример 4210H" else "Открыть пример"
+        if st.button(label, key="open_demo") or "case" not in state:
             if DEMO.exists():
                 state.case, state.obj, state.pal = load_project(DEMO)
                 state.source = "пример 4210H"
@@ -194,17 +201,31 @@ def _object_editor():
 
 
 def _settings(case: RigisCase) -> RigisCase:
-    st.subheader("2. Настройки")
     c1, c2 = st.columns([3, 2])
     with c1:
         st.markdown("**Зоны пласта** (параметры по интервалам глубин; пусто — по умолчанию)")
-        df = pd.DataFrame([asdict(i) for i in case.intervals]).rename(columns={
-            "n": "№", "top": "Кровля", "bottom": "Подошва", "h_eff": "h эфф, м", "p_res": "Рпл нач, атм",
-            "flood_share": "Доля заводн.", "r_contour": "Rконт, м", "inj_ratio": "ППД/доб"})
-        ed = st.data_editor(df, hide_index=True, num_rows="fixed", key="zones", use_container_width=True)
-        intervals = [IntervalParams(int(r["№"]), float(r["Кровля"] or 0), float(r["Подошва"] or 0),
-                                    float(r["h эфф, м"] or 0), float(r["Рпл нач, атм"] or 0), float(r["Доля заводн."] or 0),
-                                    float(r["Rконт, м"] or 0), float(r["ППД/доб"] or 0)) for _, r in ed.iterrows()]
+        cols = {"n": "№", "top": "Кровля", "bottom": "Подошва", "h_eff": "h эфф, м", "p_res": "Рпл нач, атм",
+                "flood_share": "Доля заводн.", "r_contour": "Rконт, м", "inj_ratio": "ППД/доб"}
+        df = pd.DataFrame([asdict(i) for i in case.intervals]).rename(columns=cols)
+        if not df.empty:
+            # пустые строки примера (все параметры нулевые) занимали весь экран
+            param_cols = [c for c in cols.values() if c != "№"]
+            df = df[df[param_cols].fillna(0).abs().sum(axis=1) > 0]
+        ed = st.data_editor(df, hide_index=True, num_rows="dynamic", key="zones", use_container_width=True)
+        st.caption("h эфф — эффективная толщина; Rконт — радиус контура питания; "
+                   "ППД/доб — отношение закачки к добыче. Строку можно добавить внизу таблицы.")
+
+        def _num(value, default=0.0):
+            return float(value) if pd.notna(value) else default
+
+        intervals = []
+        for _, r in ed.iterrows():
+            n = r["№"]
+            intervals.append(IntervalParams(
+                int(n) if pd.notna(n) else len(intervals) + 1,
+                _num(r["Кровля"]), _num(r["Подошва"]), _num(r["h эфф, м"]),
+                _num(r["Рпл нач, атм"]), _num(r["Доля заводн."]),
+                _num(r["Rконт, м"]), _num(r["ППД/доб"])))
         d = case.defaults
         st.markdown("**По умолчанию и скважина**")
         a, b, cc, dd, e = st.columns(5)
@@ -533,13 +554,20 @@ def render():
                "нефти или NPV при пределе обводнённости и покажет, какие участки изолировать пакерами. Расчёт срезов — формулы листа «РИГИС» "
                "RE Tools (сверено с книгой), подбор — точный, вместо «Поиска решения». Несколько стволов (МЗС) "
                "определяются по столбцу «скважина» выгрузки.")
-    _sources()
+    # при первом открытии сразу показываем посчитанный пример: пустой экран
+    # с формой загрузки не даёт понять, что умеет инструмент
     state = st.session_state
+    if "case" not in state and "src" not in state and DEMO.exists():
+        state["src"] = "Пример: скважина 4210H"
+        state.case, state.obj, state.pal = load_project(DEMO)
+        state.source = "пример 4210H"
+    _sources()
     if "case" not in state:
         st.info("Выберите источник данных.")
         return
     _object_editor()
-    case = _settings(state.case)
+    with st.expander("2. Настройки компоновки, контакты и прогноз", expanded=False):
+        case = _settings(state.case)
     obj, pal = state.obj, state.pal
     cases = split_laterals(case)
     if len(cases) > 1:
@@ -585,16 +613,17 @@ def render():
     rho = obj.rho_oil
     qw = lambda w: max(w.q_liq - w.q_oil / rho, 0.0)   # noqa: E731  вода, м³/сут
     k = st.columns(6)
-    k[0].metric("Qн, т/сут", f"{wc.q_oil:.1f}", f"{wc.q_oil - ao.q_oil:+.1f} к «всё открыто»")
-    k[1].metric("Qж, м³/сут", f"{wc.q_liq:.1f}")
-    k[2].metric("Qв, м³/сут", f"{qw(wc):.1f}", f"{qw(wc) - qw(ao):+.1f}", delta_color="inverse")
-    k[3].metric("Обводнённость, %", f"{wc.water_cut:.1f}", f"{wc.water_cut - ao.water_cut:+.1f} п.п.", delta_color="inverse")
+    k[0].metric("Qн, т/сут", _fmt(wc.q_oil), f"{_fmt(wc.q_oil - ao.q_oil)} к «всё открыто»")
+    k[1].metric("Qж, м³/сут", _fmt(wc.q_liq))
+    k[2].metric("Qв, м³/сут", _fmt(qw(wc)), _fmt(qw(wc) - qw(ao)), delta_color="inverse")
+    k[3].metric("Обводнённость, %", _fmt(wc.water_cut),
+                f"{_fmt(wc.water_cut - ao.water_cut)} п.п.", delta_color="inverse")
     k[4].metric("Фильтров", sum(len(c.filters) for c in wc.laterals))
-    k[5].metric("Длина фильтров, м", f"{sum(f.length for c in wc.laterals for f in c.filters):.0f}")
-    st.caption(f"Для сравнения, весь коллектор открыт: Qн {ao.q_oil:.1f} т/сут, Qж {ao.q_liq:.1f} м³/сут, "
-               f"Qв {qw(ao):.1f} м³/сут, обв. {ao.water_cut:.1f}%."
+    k[5].metric("Длина фильтров, м", _fmt(sum(f.length for c in wc.laterals for f in c.filters), 0))
+    st.caption(f"Для сравнения, весь коллектор открыт: Qн {_fmt(ao.q_oil)} т/сут, Qж {_fmt(ao.q_liq)} м³/сут, "
+               f"Qв {_fmt(qw(ao))} м³/сут, обв. {_fmt(ao.water_cut)}%."
                + (f" В итоге подобранной компоновки — переток по пласту из изолированных участков: "
-                  f"Qж {wc.cross_liq:.1f} м³/сут, Qн {wc.cross_oil:.1f} т/сут." if cf["crossflow"] else ""))
+                  f"Qж {_fmt(wc.cross_liq)} м³/сут, Qн {_fmt(wc.cross_oil)} т/сут." if cf["crossflow"] else ""))
     mode_txt = "фильтра" if state.get("wc_mode", "filter") == "filter" else "скважины"
     if len(cases) == 1:
         _lateral_block(cases[0], wc.laterals[0], mode_txt)
