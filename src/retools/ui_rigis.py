@@ -28,7 +28,8 @@ from .field_object import read_field_object, read_jd_pallets
 from .object_builder import build_jd_pallets, build_object, jd_settings_from_object, mbe_table
 from .report import well_xlsx
 from .rigis import CompletionRules, Defaults, IntervalParams, Regressions, RigisCase, compute, read_case_from_book
-from .rigis_io import case_from_dict, case_to_dict, load_project, read_rigis_table, save_project
+from .rigis_io import (case_from_dict, case_to_dict, load_project, project_bytes,
+                       read_rigis_table, save_project)
 
 
 def _fmt(value: float, digits: int = 1) -> str:
@@ -674,7 +675,19 @@ def render():
                     "Фильтров": sum(len(c.filters) for c in w.laterals),
                     "Длина фильтров, м": round(sum(f.length for c in w.laterals for f in c.filters)),
                     "Пакеров": n_pk(w) if name != "всё открыто" else 0})
-    st.dataframe(pd.DataFrame(cmp), hide_index=True, use_container_width=True)
+    cmp_df = pd.DataFrame(cmp)
+    cfg = {col: st.column_config.NumberColumn(col, format="%.1f")
+           for col in ("Qн, т/сут", "Qж, м³/сут", "Qв, м³/сут", "Обв., %", "Длина фильтров, м")}
+    cfg["Фильтров"] = st.column_config.NumberColumn("Фильтров", format="%d")
+    cfg["Пакеров"] = st.column_config.NumberColumn("Пакеров", format="%d")
+    cfg["Вариант"] = st.column_config.TextColumn("Вариант", width="medium")
+    # подобранную компоновку ставим первой и помечаем звёздочкой: подсветка через
+    # pandas Styler требует jinja2, а маркер работает без лишней зависимости
+    order = {"подобранная": 0, "своя": 1, "всё открыто": 2}
+    cmp_df = cmp_df.sort_values("Вариант", key=lambda s: s.map(order)).reset_index(drop=True)
+    cmp_df["Вариант"] = cmp_df["Вариант"].map(lambda v: f"★ {v}" if v == "подобранная" else f"   {v}")
+    st.dataframe(cmp_df, hide_index=True, use_container_width=True, column_config=cfg)
+    st.caption("★ — подобранная компоновка; с ней сравниваются «своя» и «всё открыто».")
     for n in notes:
         st.warning(n)
     with st.expander("Планшет, фильтры и изоляция своей компоновки", expanded=False):
@@ -784,6 +797,5 @@ def render():
                                                             forecasts={"своя": state.fc_man}),
                        file_name="своя_компоновка_РИГИС.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    tmp = Path(tempfile.gettempdir()) / "retools_project.json"
-    save_project(tmp, case, obj, pal)
-    c2.download_button("Проект (JSON)", tmp.read_bytes(), file_name="проект_РИГИС.json", mime="application/json")
+    c2.download_button("Проект (JSON)", project_bytes(case, obj, pal), file_name="проект_РИГИС.json",
+                       mime="application/json")
