@@ -26,6 +26,7 @@ from .forecast import forecast
 from .lifetime import OBJECTIVES, plan_lifetime
 from .field_object import read_field_object, read_jd_pallets
 from .object_builder import build_jd_pallets, build_object, jd_settings_from_object, mbe_table
+from . import ui_theme
 from .report import well_xlsx
 from .rigis import CompletionRules, Defaults, IntervalParams, Regressions, RigisCase, compute, read_case_from_book
 from .rigis_io import (case_from_dict, case_to_dict, load_project, project_bytes,
@@ -196,6 +197,7 @@ def _object_editor():
         fig.update_yaxes(type="log", row=1, col=3)
         fig.update_xaxes(title_text="Рпл, атм")
         fig.update_layout(height=280, margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=-0.35))
+        ui_theme.style(fig, height=int(fig.layout.height or 320))
         st.plotly_chart(fig, use_container_width=True)
         st.caption("Матбаланс текущего объекта, решённый заново. В книге ниже ~124 атм «Подбор параметра» не "
                    "сошёлся (невязка до −830), поэтому кривые книги там отличаются.")
@@ -359,7 +361,9 @@ def _lateral_block(case, comp, mode_txt, key="auto"):
     well = case.slices[0].well if case.slices else ""
     title = (f"{well}: своя компоновка" if key.startswith("manual") else
              f"{well}: компоновка при пределе обводнённости {mode_txt} {comp.max_wc:g}%")
-    st.plotly_chart(_planshet(case, comp, title), use_container_width=True, key=f"planshet_{key}")
+    _planshet_fig = _planshet(case, comp, title)
+    st.plotly_chart(ui_theme.style(_planshet_fig, height=int(_planshet_fig.layout.height or 420)),
+                    use_container_width=True, key=f"planshet_{key}")
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("**Фильтры**")
@@ -483,6 +487,7 @@ def _dynamics_charts(cases, variants, fkw, rho, rules, state):
     fig = _watering_map(cases[li], w.laterals[li], f, li, rho,
                         f"Обводнённость срезов по месяцам — {name}")
     if fig is not None:
+        ui_theme.style(fig, height=int(fig.layout.height or 320))
         st.plotly_chart(fig, use_container_width=True, key=f"wmap_{name}_{li}")
         st.caption("Каждая строка — срез РИГИС, цвет — его обводнённость в этом месяце (у изолированных — то, что "
                    "они отдают перетоком). Тёмно-зелёные линии — границы фильтров. Видно, где и когда к стволу "
@@ -494,6 +499,7 @@ def _dynamics_charts(cases, variants, fkw, rho, rules, state):
         fig = _cone_section(cases[li], w.laterals[li], f, li, month, owc, goc, rules,
                             f"Разрез вдоль ствола, месяц {month} — {name}", fkw.get("barrier"))
         if fig is not None:
+            ui_theme.style(fig, height=int(fig.layout.height or 320))
             st.plotly_chart(fig, use_container_width=True, key=f"section_{name}_{li}")
             st.caption("Вода поднимается от ВНК, газ опускается от ГНК (Баклей–Леверетт с гравитацией). Когда фронт "
                        "доходит до ствола — прорыв. Показана только подошвенная часть; вода сбоку (законтурная, ППД) "
@@ -643,6 +649,7 @@ def render():
     fig.update_layout(title=f"Qн от предела обводнённости {mode_txt}", height=320,
                       xaxis_title=f"предел обводнённости {mode_txt}, %", yaxis_title="Qн, т/сут",
                       margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=-0.3))
+    ui_theme.style(fig, height=int(fig.layout.height or 320))
     st.plotly_chart(fig, use_container_width=True)
 
     # --- своя компоновка ---
@@ -727,6 +734,7 @@ def render():
                                  line=dict(color=col), showlegend=False), 1, 4)
     fig.update_xaxes(title_text="месяц")
     fig.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=-0.3))
+    ui_theme.style(fig, height=int(fig.layout.height or 320))
     st.plotly_chart(fig, use_container_width=True)
 
     def cum_at(f, month):

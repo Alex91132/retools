@@ -15,12 +15,14 @@ import tempfile
 from pathlib import Path
 
 from .resources import data_dir
+from .ui_theme import COLORS
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from . import ui_theme
 from .gtm_calc import ObjectSheet, production_rows, rating_row, result_by_month
 
 FIX = data_dir()
@@ -225,15 +227,30 @@ def render():
                        help="Три листа: рейтинг, расчёт добычи по строкам, сводка по месяцам.")
     st.subheader("Профиль добычи")
     dates = [m["date"] for m in months]
-    fig = make_subplots(rows=1, cols=3, subplot_titles=("Qн, т/сут и Qж, м³/сут", "Обводнённость, %", "Рпл и Рзаб, атм"))
-    fig.add_trace(go.Scatter(x=dates, y=[m["q_oil"] for m in months], name="Qн", line=dict(color="#2e9d4f")), 1, 1)
-    fig.add_trace(go.Scatter(x=dates, y=[m["q_liq"] for m in months], name="Qж", line=dict(color="#2f7fd8")), 1, 1)
-    fig.add_trace(go.Scatter(x=dates, y=[m["water_cut"] for m in months], name="обв.", line=dict(color="#d64545"),
-                             showlegend=False), 1, 2)
-    fig.add_trace(go.Scatter(x=dates, y=[m["p_res"] for m in months], name="Рпл", line=dict(color="#8e44ad")), 1, 3)
-    fig.add_trace(go.Scatter(x=dates, y=[m["p_wf"] for m in months], name="Рзаб", line=dict(color="#9aa0a6")), 1, 3)
-    fig.update_layout(height=330, margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=-0.25))
-    st.plotly_chart(fig, use_container_width=True)
+    # три отдельных графика в колонках: на телефоне колонки схлопываются и
+    # графики становятся по одному в строку (раньше был один рисунок на три панели)
+    g1, g2, g3 = st.columns(3)
+    f_q = go.Figure()
+    f_q.add_trace(go.Scatter(x=dates, y=[m["q_oil"] for m in months], name="Qн, т/сут",
+                             line=dict(color=COLORS["oil"])))
+    f_q.add_trace(go.Scatter(x=dates, y=[m["q_liq"] for m in months], name="Qж, м³/сут",
+                             line=dict(color=COLORS["liq"])))
+    f_q.update_layout(title="Дебиты", yaxis_title="т/сут · м³/сут")
+    g1.plotly_chart(ui_theme.style(f_q), use_container_width=True)
+
+    f_w = go.Figure()
+    f_w.add_trace(go.Scatter(x=dates, y=[m["water_cut"] for m in months], name="Обводнённость",
+                             line=dict(color=COLORS["water"])))
+    f_w.update_layout(title="Обводнённость", yaxis_title="%", showlegend=False)
+    g2.plotly_chart(ui_theme.style(f_w, legend=False), use_container_width=True)
+
+    f_p = go.Figure()
+    f_p.add_trace(go.Scatter(x=dates, y=[m["p_res"] for m in months], name="Рпл",
+                             line=dict(color=COLORS["p_res"])))
+    f_p.add_trace(go.Scatter(x=dates, y=[m["p_wf"] for m in months], name="Рзаб",
+                             line=dict(color=COLORS["p_wf"])))
+    f_p.update_layout(title="Давления", yaxis_title="атм")
+    g3.plotly_chart(ui_theme.style(f_p), use_container_width=True)
     by_year = {}
     for m in months:
         y = by_year.setdefault(m["date"].year, {"Год": m["date"].year, "Нефть, тыс. т": 0.0, "Жидкость, тыс. м³": 0.0})
@@ -249,14 +266,22 @@ def render():
     a = rating[names.index(pick)]["A"]
     w = [r for r in rows if r["A"] == a]
     if w:
-        fig = make_subplots(rows=1, cols=3, subplot_titles=("Qн / Qж", "Обводнённость, %", "Рпл истощ. / завод., атм"))
         t = [r["FL"] for r in w]
-        fig.add_trace(go.Scatter(x=t, y=[r["BE"] for r in w], name="Qн", line=dict(color="#2e9d4f")), 1, 1)
-        fig.add_trace(go.Scatter(x=t, y=[r["BC"] for r in w], name="Qж", line=dict(color="#2f7fd8")), 1, 1)
-        fig.add_trace(go.Scatter(x=t, y=[r["BD"] for r in w], name="обв.", line=dict(color="#d64545"),
-                                 showlegend=False), 1, 2)
-        fig.add_trace(go.Scatter(x=t, y=[r["CL"] for r in w], name="Рпл истощ.", line=dict(color="#8e44ad")), 1, 3)
-        fig.add_trace(go.Scatter(x=t, y=[r["DY"] for r in w], name="Рпл завод.", line=dict(color="#e07b00")), 1, 3)
-        fig.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=-0.3))
-        st.plotly_chart(fig, use_container_width=True)
+        g1, g2, g3 = st.columns(3)
+        f_q = go.Figure()
+        f_q.add_trace(go.Scatter(x=t, y=[r["BE"] for r in w], name="Qн, т/сут", line=dict(color=COLORS["oil"])))
+        f_q.add_trace(go.Scatter(x=t, y=[r["BC"] for r in w], name="Qж, м³/сут", line=dict(color=COLORS["liq"])))
+        f_q.update_layout(title="Дебиты скважины", yaxis_title="т/сут · м³/сут")
+        g1.plotly_chart(ui_theme.style(f_q, height=300), use_container_width=True)
+
+        f_w = go.Figure()
+        f_w.add_trace(go.Scatter(x=t, y=[r["BD"] for r in w], name="Обводнённость", line=dict(color=COLORS["water"])))
+        f_w.update_layout(title="Обводнённость", yaxis_title="%", showlegend=False)
+        g2.plotly_chart(ui_theme.style(f_w, height=300, legend=False), use_container_width=True)
+
+        f_p = go.Figure()
+        f_p.add_trace(go.Scatter(x=t, y=[r["CL"] for r in w], name="Рпл истощ.", line=dict(color=COLORS["p_res"])))
+        f_p.add_trace(go.Scatter(x=t, y=[r["DY"] for r in w], name="Рпл завод.", line=dict(color=COLORS["inj"])))
+        f_p.update_layout(title="Давления", yaxis_title="атм")
+        g3.plotly_chart(ui_theme.style(f_p, height=300), use_container_width=True)
 
