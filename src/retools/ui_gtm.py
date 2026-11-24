@@ -39,6 +39,31 @@ RATING_FIELDS = [
 ]
 TEXT_COLS = {"E", "F", "G", "H", "I", "AE"}
 
+# Форматы чисел в таблицах: единицы уже в заголовках, здесь — точность.
+def _cfg(fields, spec):
+    return {name: st.column_config.NumberColumn(name, format=fmt) for name, fmt in spec.items()}
+
+
+WELL_CFG = _cfg(RATING_FIELDS, {
+    "h эфф, м": "%.1f", "Кп": "%.3f", "k, мД": "%.1f", "Kv/Kh": "%.2f", "Sw нач.": "%.2f",
+    "Рпл нач., атм": "%.0f", "Доля заводн. толщин": "%.2f", "L ГС общ., м": "%.0f",
+    "L ГС эфф., м": "%.0f", "L БС общ., м": "%.0f", "L БС эфф., м": "%.0f",
+    "Xf, м": "%.0f", "Wf, мм": "%.1f", "k проппанта, Д": "%.1f", "Rконт, м": "%.0f",
+    "Rскв, м": "%.0f", "Скин": "%.2f", "Рзаб, атм": "%.0f", "Tзап, сут": "%.0f",
+    "ППД/доб": "%.2f", "Аквифер, V/Vпл": "%.3f", "Макс. приёмист., м³/сут": "%.0f",
+})
+
+RATING_CFG = {
+    "Qж, м³/сут": st.column_config.NumberColumn("Qж, м³/сут", format="%.1f"),
+    "Qн, т/сут": st.column_config.NumberColumn("Qн, т/сут", format="%.1f"),
+    "Обв., %": st.column_config.NumberColumn("Обв., %", format="%.1f"),
+    "ПИ": st.column_config.NumberColumn("ПИ", format="%.3f"),
+    "Jd": st.column_config.NumberColumn("Jd", format="%.3f"),
+    "НГЗ, тыс. т": st.column_config.NumberColumn("НГЗ, тыс. т", format="%.1f"),
+    "НИЗ, тыс. т": st.column_config.NumberColumn("НИЗ, тыс. т", format="%.1f"),
+    "КИН потенц.": st.column_config.NumberColumn("КИН потенц.", format="%.3f"),
+}
+
 
 def _example():
     book = json.loads((FIX / "production_book.json").read_text(encoding="utf-8"))
@@ -169,7 +194,7 @@ def render():
         objs = state.gtm_objs_built
     st.subheader("Скважины")
     df = st.data_editor(_to_df(state.gtm_rows), num_rows="dynamic", use_container_width=True, key="gtm_table",
-                        hide_index=True)
+                        hide_index=True, column_config=WELL_CFG, height=430)
     rows_in = _from_df(df, state.gtm_rows)
     missing = sorted({r.get("G") for r in rows_in} - set(objs))
     if missing:
@@ -194,7 +219,10 @@ def render():
         "№": r["A"], "Скважина": r["E"], "Тип": r["K"], "Qж, м³/сут": round(r["BC"], 1), "Qн, т/сут": round(r["BE"], 1),
         "Обв., %": round(r["BD"], 1), "ПИ": round(r["DF"], 3), "Jd": round(r["CF"], 3),
         "НГЗ, тыс. т": round(r["AZ"], 1), "НИЗ, тыс. т": round(r["BB"], 1), "КИН потенц.": round(r["BA"], 3)}
-        for r in rating]), hide_index=True, use_container_width=True)
+        for r in rating]), hide_index=True, use_container_width=True, column_config=RATING_CFG)
+    st.download_button("Рейтинг в Excel", _xlsx(rating, rows, months), file_name="расчёт_добычи.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                       help="Три листа: рейтинг, расчёт добычи по строкам, сводка по месяцам.")
     st.subheader("Профиль добычи")
     dates = [m["date"] for m in months]
     fig = make_subplots(rows=1, cols=3, subplot_titles=("Qн, т/сут и Qж, м³/сут", "Обводнённость, %", "Рпл и Рзаб, атм"))
@@ -213,7 +241,9 @@ def render():
         y["Жидкость, тыс. м³"] += m["liq_m3"]
         y["Нак. нефть, тыс. т"] = m["cum_oil_t"]
     st.dataframe(pd.DataFrame([{k: (round(v, 2) if isinstance(v, float) else v) for k, v in y.items()}
-                               for y in by_year.values()]), hide_index=True)
+                               for y in by_year.values()]), hide_index=True,
+                 column_config={c: st.column_config.NumberColumn(c, format="%.2f")
+                                for c in ("Нефть, тыс. т", "Жидкость, тыс. м³", "Нак. нефть, тыс. т")})
     names = [f"{r['A']} · {r['E']} ({r['K']})" for r in rating]
     pick = st.selectbox("Скважина", names)
     a = rating[names.index(pick)]["A"]
@@ -229,5 +259,4 @@ def render():
         fig.add_trace(go.Scatter(x=t, y=[r["DY"] for r in w], name="Рпл завод.", line=dict(color="#e07b00")), 1, 3)
         fig.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=-0.3))
         st.plotly_chart(fig, use_container_width=True)
-    st.download_button("Расчёт в Excel", _xlsx(rating, rows, months), file_name="расчёт_добычи.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+

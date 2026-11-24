@@ -182,10 +182,15 @@ def pallets_from_dict(d: dict) -> JdSectionPallets:
     return JdSectionPallets(grids=tuple(_grid_from(g) for g in d["grids"]), thickness=tuple(d["thickness"]))
 
 
-def save_project(path, case: RigisCase, obj: FieldObject, pallets: JdSectionPallets) -> None:
+def project_bytes(case: RigisCase, obj: FieldObject, pallets: JdSectionPallets) -> bytes:
+    """Проект в байтах — для скачивания без временного файла."""
     data = {"format": "retools-rigis/1", "case": case_to_dict(case), "object": object_to_dict(obj),
             "jd_pallets": pallets_to_dict(pallets)}
-    Path(path).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
+
+def save_project(path, case: RigisCase, obj: FieldObject, pallets: JdSectionPallets) -> None:
+    Path(path).write_bytes(project_bytes(case, obj, pallets))
 
 
 def load_project(path) -> tuple[RigisCase, FieldObject, JdSectionPallets]:
