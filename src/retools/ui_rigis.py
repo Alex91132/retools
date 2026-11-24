@@ -26,7 +26,8 @@ from .economics import Economics, capex, cash_flow, npv
 from .forecast import forecast
 from .lifetime import OBJECTIVES, plan_lifetime
 from .field_object import read_field_object, read_jd_pallets
-from .object_builder import build_jd_pallets, build_object, jd_settings_from_object, mbe_table
+from .object_builder import (build_jd_pallets, build_object, jd_settings_from_object,
+                             mbe_table, p_init_warnings)
 from . import ui_theme
 from .report import well_xlsx
 from .rigis import CompletionRules, Defaults, IntervalParams, Regressions, RigisCase, compute, read_case_from_book
@@ -582,6 +583,8 @@ def render():
     with st.expander("2. Настройки компоновки, контакты и прогноз", expanded=False):
         case = _settings(state.case)
     obj, pal = state.obj, state.pal
+    for message in p_init_warnings(obj.params):
+        st.warning(message)
     cases = split_laterals(case)
     if len(cases) > 1:
         st.info(f"МЗС: {len(cases)} ствола — " + ", ".join(f"«{c.slices[0].well}» ({len(c.slices)} срезов)" for c in cases)

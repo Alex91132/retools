@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass
 
 from scipy.optimize import brentq
@@ -169,6 +170,29 @@ def ph_mbe_rhs(bo, boi, rsi, rs, bg, bgi, sw, cw, cf, pi, p, m):
     return (bo - boi) + (rsi - rs) * bg + m * (bg / bgi - 1) + boi * (1 + m) * ((sw * cw + cf) / (1 - sw)) * (pi - p)
 
 
+def p_init_warnings(params: dict) -> list[str]:
+    """Проверяет, согласовано ли начальное давление с сеткой матбаланса.
+
+    Сетка книги строится от глубины: верхняя точка E3 = depth/10 + 250 атм.
+    Если Pi ниже этой точки, таблица начинается «до начала разработки» — там
+    Np отрицательный, а So + Swi > 1 (в книге ровно так: Pi = 159 при E3 = 410,5).
+    Если Pi выше — наоборот, начальное давление не покрыто кривой.
+    """
+    depth = float(params.get("depth", 0.0) or 0.0)
+    p_init = float(params.get("p_init", 0.0) or 0.0)
+    if depth <= 0 or p_init <= 0:
+        return []
+    top = depth / 10.0 + 250.0
+    if abs(p_init - top) <= 0.02 * top:
+        return []
+    if p_init < top:
+        return [f"Pi = {p_init:g} атм ниже верхней точки сетки {top:g} атм "
+                f"(depth/10 + 250): строки выше Pi дают отрицательный Np и So + Swi > 1. "
+                f"Для практических расчётов задайте Pi ≈ {top:g} атм."]
+    return [f"Pi = {p_init:g} атм выше верхней точки сетки {top:g} атм "
+            f"(depth/10 + 250): кривая объекта не покрывает начальное давление."]
+
+
 def build_object(params: dict, npz_pallet: Grid2D | None = None, name: str = "объект") -> FieldObject:
     """Объект разработки из параметров (кривые P → Bo, Ct, So, Sg по матбалансу).
 
@@ -176,6 +200,8 @@ def build_object(params: dict, npz_pallet: Grid2D | None = None, name: str = "о
     строится по параметрам (waterflood.fdp_pallets, порт FDP_Functions).
     """
     p = dict(params)
+    for message in p_init_warnings(p):
+        warnings.warn(message, UserWarning, stacklevel=2)
     p["pvt_json"] = json.dumps(pvt_json(p))
     rows = mbe_table(p)
     if npz_pallet is None:
