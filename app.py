@@ -2,35 +2,38 @@
 """Streamlit-приложение retools: интерактивный расчёт добычи.
 
 Запуск: streamlit run app.py
-"""
-import streamlit as st
-import numpy as np
-import matplotlib.pyplot as plt
 
-from retools.fa import Scenario, decompose
-from retools.cpvt import CPVT
-from retools.pallets import default_pallets
+Навигация — через st.navigation: каждая страница выполняется только при открытии,
+поэтому тяжёлый подбор компоновки не считается при переключении на PVT или палетки.
+"""
+import matplotlib.pyplot as plt
+import numpy as np
+import streamlit as st
+
 from retools import ui_gtm, ui_rigis
+from retools.cpvt import CPVT
+from retools.fa import Scenario, decompose
+from retools.pallets import default_pallets
 
 st.set_page_config(page_title="RE Tools", page_icon="🛢️", layout="wide")
-st.title("🛢️ RE Tools: расчёт добычи скважин")
-st.caption("Порт расчётника RE Tools (Excel/VBA → Python) | "
-           "РИГИС, PVT, матбаланс, ОФП, Jd-продуктивность, палетки")
 
-tab_rigis, tab_prod, tab_pvt, tab_fa, tab_pal = st.tabs([
-    "🧭 Подбор компоновки (РИГИС)", "📊 Расчёт добычи (рейтинг ГТМ)", "🧪 PVT-свойства", "📈 Факторный анализ", "🎛️ Палетки"
-])
 
-with tab_rigis:
+@st.cache_data(show_spinner=False)
+def _pallets():
+    return default_pallets()
+
+
+def page_rigis() -> None:
     ui_rigis.render()
 
-# ============ Расчёт добычи ============
-with tab_prod:
+
+def page_gtm() -> None:
     ui_gtm.render()
 
-# ============ PVT ============
-with tab_pvt:
+
+def page_pvt() -> None:
     st.header("PVT-свойства флюида")
+    st.caption("Корреляции Standing/McCain, сверены с книгой на 36 давлениях.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -80,14 +83,11 @@ with tab_pvt:
     st.pyplot(plt.gcf())
     plt.close()
 
-# ============ Факторный анализ ============
-with tab_fa:
-    st.header("Факторный анализ отклонений Qн")
 
-    st.markdown("""
-    Разложение отклонения дебита нефти между двумя состояниями скважины
-    на вклады четырёх факторов: обводнённость, Рпл, Рзаб, Кпр.
-    """)
+def page_fa() -> None:
+    st.header("Факторный анализ отклонений Qн")
+    st.caption("Разложение отклонения дебита нефти между двумя состояниями скважины "
+               "на вклады четырёх факторов: обводнённость, Рпл, Рзаб, Кпр.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -136,11 +136,13 @@ with tab_fa:
 
     st.info(f"Невязка баланса: {result.balance_error:.6f} м³/сут (сумма факторов = ΔQн)")
 
-# ============ Палетки ============
-with tab_pal:
-    st.header("Палетки нормировки Jd")
 
-    pallets = default_pallets()
+def page_pallets() -> None:
+    st.header("Палетки нормировки Jd")
+    st.caption("Палетки нормируют Jd (безразмерную продуктивность) для секций горизонтальной "
+               "скважины разной длины при разных давлениях и насыщенностях. Интерполяция — билинейная.")
+
+    pallets = _pallets()
     pallet_name = st.selectbox("Палетка", ["mu", "kro_mix", "krw_mix"],
                                format_func=lambda x: {
                                    "mu": "Вязкость смеси (P × Sw)",
@@ -168,8 +170,17 @@ with tab_pal:
     st.pyplot(plt.gcf())
     plt.close()
 
-    st.markdown("""
-    **Как пользоваться**: палетки нормируют Jd (безразмерную продуктивность)
-    для секций горизонтальной скважины разной длины при разных давлениях
-    и насыщенностях. Интерполяция — билинейная по сетке.
-    """)
+
+pages = {
+    "Расчёт": [
+        st.Page(page_rigis, title="Подбор компоновки", icon="🧭", default=True),
+        st.Page(page_gtm, title="Расчёт добычи", icon="📊"),
+    ],
+    "Справочники": [
+        st.Page(page_pvt, title="PVT-свойства", icon="🧪"),
+        st.Page(page_fa, title="Факторный анализ", icon="📈"),
+        st.Page(page_pallets, title="Палетки", icon="🎛️"),
+    ],
+}
+
+st.navigation(pages).run()

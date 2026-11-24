@@ -11,6 +11,9 @@ pip-ephem-wheel-cache-*/
 pip-modern-metadata-*/
 pytest-of-*/
 data/
+_shot*/
+*.log
+retools_project.json
 *.xlsm
 *.xlsx
 !tests/fixtures/*.xlsx
