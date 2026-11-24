@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 
-from retools import ui_gtm, ui_rigis
+from retools import ui_gtm, ui_rigis, ui_theme
 from retools.cpvt import CPVT
 from retools.fa import Scenario, decompose
 from retools.pallets import default_pallets
@@ -34,6 +34,7 @@ def page_gtm() -> None:
 def page_pvt() -> None:
     st.header("PVT-свойства флюида")
     st.caption("Корреляции Standing/McCain, сверены с книгой на 36 давлениях.")
+    plt.rcParams.update(ui_theme.MPL_RC)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -49,43 +50,33 @@ def page_pvt() -> None:
     pressures = np.linspace(10, 350, 50)
     props = [fluid.calc(p, 32) for p in pressures]
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle("PVT-свойства (McCain-based)", fontsize=14, fontweight="bold")
-
-    axes[0, 0].plot(pressures, [p["rs"] for p in props], "b-")
-    axes[0, 0].axvline(pb, color="r", ls="--", alpha=0.5, label="Pb")
-    axes[0, 0].set_ylabel("Rs, м³/м³")
-    axes[0, 0].set_title("Газосодержание")
-    axes[0, 0].legend()
-    axes[0, 0].grid(alpha=0.3)
-
-    axes[0, 1].plot(pressures, [p["bo"] for p in props], "g-")
-    axes[0, 1].axvline(pb, color="r", ls="--", alpha=0.5)
-    axes[0, 1].set_ylabel("Bo, м³/м³")
-    axes[0, 1].set_title("Объёмный коэффициент")
-    axes[0, 1].grid(alpha=0.3)
-
-    axes[1, 0].plot(pressures, [p["mu_oil"] for p in props], "r-")
-    axes[1, 0].axvline(pb, color="r", ls="--", alpha=0.5)
-    axes[1, 0].set_ylabel("µ, сПз")
-    axes[1, 0].set_title("Вязкость нефти")
-    axes[1, 0].grid(alpha=0.3)
-
-    axes[1, 1].plot(pressures, [p["z"] for p in props], "k-")
-    axes[1, 1].set_ylabel("z")
-    axes[1, 1].set_title("Коэф. сверхсжимаемости газа")
-    axes[1, 1].grid(alpha=0.3)
-
-    for ax in axes.flat:
-        ax.set_xlabel("P, атм")
-
-    plt.tight_layout()
-    st.pyplot(plt.gcf())
-    plt.close()
+    # четыре отдельных графика: на телефоне колонки схлопываются по одному в ряд
+    charts = [
+        ("Газосодержание", "Rs, м³/м³", [p["rs"] for p in props], "tab:blue", True),
+        ("Объёмный коэффициент", "Bo, м³/м³", [p["bo"] for p in props], "tab:green", False),
+        ("Вязкость нефти", "µ, сПз", [p["mu_oil"] for p in props], "tab:red", False),
+        ("Сжимаемость газа", "z", [p["z"] for p in props], "black", False),
+    ]
+    for i in range(0, 4, 2):
+        left, right = st.columns(2)
+        for holder, (title, ylabel, values, color, with_pb) in zip((left, right), charts[i:i + 2]):
+            fig, ax = plt.subplots(figsize=(6, 3.4))
+            ax.plot(pressures, values, color=color)
+            if with_pb:
+                ax.axvline(pb, color="r", ls="--", alpha=0.6, label="Pb")
+                ax.legend()
+            ax.set_xlabel("P, атм")
+            ax.set_ylabel(ylabel)
+            ax.set_title(title)
+            ax.grid(alpha=0.3)
+            fig.tight_layout()
+            holder.pyplot(fig)
+            plt.close(fig)
 
 
 def page_fa() -> None:
     st.header("Факторный анализ отклонений Qн")
+    plt.rcParams.update(ui_theme.MPL_RC)
     st.caption("Разложение отклонения дебита нефти между двумя состояниями скважины "
                "на вклады четырёх факторов: обводнённость, Рпл, Рзаб, Кпр.")
 
@@ -139,6 +130,7 @@ def page_fa() -> None:
 
 def page_pallets() -> None:
     st.header("Палетки нормировки Jd")
+    plt.rcParams.update(ui_theme.MPL_RC)
     st.caption("Палетки нормируют Jd (безразмерную продуктивность) для секций горизонтальной "
                "скважины разной длины при разных давлениях и насыщенностях. Интерполяция — билинейная.")
 
