@@ -15,3 +15,6 @@ data/
 *.xlsx
 !tests/fixtures/*.xlsx
 !examples/*.xlsx
+*.log
+retools_project.json
+
