@@ -12,6 +12,7 @@ import datetime as dt
 import io
 import json
 import tempfile
+import time
 from pathlib import Path
 
 from .resources import data_dir
@@ -161,9 +162,13 @@ def _xlsx(rating: list[dict], rows: list[dict], months: list[dict]) -> bytes:
 
 def render():
     st.header("Расчёт добычи по рейтингу ГТМ")
-    st.caption("Порт листов «Рейтинг ГТМ» и «Расчёт добычи» RE Tools: запасы и потенциальный КИН, продуктивность "
-               "Get_J (ННС, ГРП, ГС, МГРП, МЗС), помесячный расчёт истощаемой и заводняемой частей пласта с ППД. "
-               "Сверено с книгой: 72 строки расчёта совпадают до 1e-10 при той же продуктивности.")
+    st.caption("Рейтинг ГТМ: запасы, КИН и стартовые дебиты по скважинам, профиль добычи по месяцам.")
+    with st.expander("Что делает инструмент", expanded=False):
+        st.markdown(
+            "Порт листов «Рейтинг ГТМ» и «Расчёт добычи» RE Tools: продуктивность Get_J для ННС, "
+            "ГРП, ГС, МГРП и МЗС, помесячный расчёт истощаемой и заводняемой частей пласта с ППД. "
+            "Сверено с книгой: 72 строки расчёта совпадают до 1e-10 при той же продуктивности."
+        )
     state = st.session_state
     src = st.radio("Источник", ["Пример книги (13 скважин)", "Книга RE Tools (.xlsm)"], horizontal=True, key="gtm_src")
     if src.startswith("Книга"):
@@ -197,6 +202,7 @@ def render():
     st.subheader("Скважины")
     df = st.data_editor(_to_df(state.gtm_rows), num_rows="dynamic", use_container_width=True, key="gtm_table",
                         hide_index=True, column_config=WELL_CFG, height=430)
+    st.caption("↔ На узком экране таблица прокручивается вбок.")
     rows_in = _from_df(df, state.gtm_rows)
     missing = sorted({r.get("G") for r in rows_in} - set(objs))
     if missing:
@@ -214,6 +220,7 @@ def render():
         rows = production_rows(rating, objs, progress=prog)
         bar.empty()
         state.gtm_res = (rating, rows, result_by_month(rows))
+        state.gtm_time = time.strftime("%H:%M")
         state.gtm_key = key
     rating, rows, months = state.gtm_res
     st.subheader("Рейтинг: запасы и стартовые параметры")
@@ -225,6 +232,8 @@ def render():
     st.download_button("Рейтинг в Excel", _xlsx(rating, rows, months), file_name="расчёт_добычи.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                        help="Три листа: рейтинг, расчёт добычи по строкам, сводка по месяцам.")
+    if state.get("gtm_time"):
+        st.caption(f"Результат рассчитан в {state['gtm_time']}; при изменении таблицы обновится автоматически.")
     st.subheader("Профиль добычи")
     dates = [m["date"] for m in months]
     # три отдельных графика в колонках: на телефоне колонки схлопываются и
