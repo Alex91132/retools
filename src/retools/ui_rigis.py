@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -557,10 +558,15 @@ def _forecast_settings(case):
 
 def render():
     st.header("Подбор компоновки по РИГИС")
-    st.caption("Загрузите РИГИС по скважине — инструмент подберёт интервалы фильтров на максимум Qн, накопленной "
-               "нефти или NPV при пределе обводнённости и покажет, какие участки изолировать пакерами. Расчёт срезов — формулы листа «РИГИС» "
-               "RE Tools (сверено с книгой), подбор — точный, вместо «Поиска решения». Несколько стволов (МЗС) "
-               "определяются по столбцу «скважина» выгрузки.")
+    st.caption("Подбор интервалов фильтров по РИГИС: максимум Qн, накопленной нефти или NPV "
+               "при пределе обводнённости.")
+    with st.expander("Что делает инструмент", expanded=False):
+        st.markdown(
+            "Расчёт срезов — формулы листа «РИГИС» RE Tools (сверено с книгой), подбор — точный "
+            "(динамическое программирование), вместо «Поиска решения» Excel. Показывает, какие "
+            "участки изолировать пакерами, раскладку хвостовика, прогноз и экономику. Несколько "
+            "стволов (МЗС) определяются по столбцу «скважина» выгрузки."
+        )
     # при первом открытии сразу показываем посчитанный пример: пустой экран
     # с формой загрузки не даёт понять, что умеет инструмент
     state = st.session_state
@@ -597,7 +603,13 @@ def render():
                 wc_mode=state.get("wc_mode", "filter"), gas_offset=state.get("gas_offset", 0.0),
                 filter_cost=state.get("filter_cost", 0.0), **state.get("contacts", {}), **cf)
     key = (repr(case), id(obj), id(pal), repr(opts), goal, repr(fkw), p_wf, repr(econ))
-    if st.button("Подобрать компоновку", type="primary") or "wcomp" not in state or state.get("comp_key") != key:
+    pressed = st.button("Подобрать компоновку", type="primary")
+    have_result = "wcomp" in state
+    stale = have_result and state.get("comp_key") != key
+    # Накопленная нефть и NPV считаются итерациями прогноза — их не пересчитываем
+    # на каждое движение ползунка, только по кнопке; для Qн расчёт мгновенный.
+    heavy_goal = goal != "rate"
+    if pressed or not have_result or (stale and not heavy_goal):
         with st.spinner("Подбор…" if goal == "rate" else "Подбор с прогнозом по итерациям…"):
             state.lp = plan_lifetime(cases, obj, pal, goal, econ, fkw, fcase, **opts)
             state.wcomp = state.lp.wcomp
@@ -609,9 +621,16 @@ def render():
             state.all_open = evaluate_multi(cases, obj, pal, ranges, [zones] * len(cases))
             state.fc_open = forecast(fcase, obj, pal, state.all_open.laterals, state.all_open.l_total, **fkw)
             state.comp_key = key
+            state.comp_time = time.strftime("%H:%M")
     wc = state.wcomp
     ao = state.all_open
     lp = state.lp
+    if stale:
+        st.warning("Параметры изменились — нажмите «Подобрать компоновку», чтобы пересчитать "
+                   "накопленную нефть или NPV. Ниже — прежний результат.")
+    elif state.get("comp_time"):
+        st.caption(f"Расчёт на {state['comp_time']} для текущих параметров; "
+                   "при изменении настроек обновится автоматически (Qн) или по кнопке (ННЗ, NPV).")
     if goal != "rate":
         gain = lp.score - lp.base_score
         st.success(f"{OBJECTIVES[goal].capitalize()} за {years} лет: {lp.score:,.1f} {lp.unit} — на {gain:+,.1f} {lp.unit} "
